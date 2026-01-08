@@ -3,9 +3,18 @@ import cors from "cors";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
+import { createServer } from "http";
+import { Server } from "socket.io";
 import { LocalRAGSystem } from "./rag-system";
 
 const app = express();
+const server = createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 const PORT = process.env.PORT || 3000;
 
 // 中间件
@@ -26,14 +35,30 @@ const upload = multer({
   },
   limits: {
     fileSize: 5 * 1024 * 1024, // 5MB 限制
+    files: 10, // 最多10个文件
   },
 });
 
-// 初始化 RAG 系统
+// 初始化 RAG 系统（带实时监控回调）
 const ragSystem = new LocalRAGSystem({
   ollamaBaseUrl: "http://localhost:11434",
   llmModel: "llama3.1",
   embeddingModel: "nomic-embed-text",
+  onVectorizationProgress: (progress) => {
+    // 向所有连接的客户端发送向量化进度
+    io.emit('vectorization-progress', progress);
+    console.log(`向量化进度: ${progress.current}/${progress.total} - ${progress.document}`);
+  },
+  onRetrievalDetails: (details) => {
+    // 向所有连接的客户端发送检索详情
+    io.emit('retrieval-details', details);
+    console.log(`检索完成: 查询="${details.query}", 找到${details.searchResults.length}个结果`);
+  },
+  onQueryVectorizationProgress: (progress) => {
+    // 向所有连接的客户端发送查询向量化进度
+    io.emit('query-vectorization-progress', progress);
+    console.log(`查询向量化: ${progress.status} - "${progress.query}"`);
+  }
 });
 
 // 启动时初始化数据库
@@ -42,13 +67,44 @@ let isSystemReady = false;
 async function initializeSystem() {
   try {
     console.log("正在初始化 RAG 系统...");
+    io.emit('system-status', { status: 'initializing', message: '正在初始化 RAG 系统...' });
+    
     await ragSystem.initializeDatabase("./data");
     isSystemReady = true;
+    
     console.log("RAG 系统初始化完成！");
+    io.emit('system-status', { status: 'ready', message: 'RAG 系统初始化完成！' });
   } catch (error) {
     console.error("RAG 系统初始化失败:", error);
+    io.emit('system-status', { status: 'error', message: `初始化失败: ${error}` });
   }
 }
+
+// WebSocket 连接处理
+io.on('connection', (socket) => {
+  console.log('客户端连接:', socket.id);
+  
+  // 发送当前系统状态
+  socket.emit('system-status', { 
+    status: isSystemReady ? 'ready' : 'initializing', 
+    message: isSystemReady ? '系统就绪' : '系统初始化中...',
+    ragStatus: ragSystem.getStatus()
+  });
+  
+  // 处理客户端断开连接
+  socket.on('disconnect', () => {
+    console.log('客户端断开连接:', socket.id);
+  });
+  
+  // 处理客户端请求系统状态
+  socket.on('request-status', () => {
+    socket.emit('system-status', { 
+      status: isSystemReady ? 'ready' : 'initializing', 
+      message: isSystemReady ? '系统就绪' : '系统初始化中...',
+      ragStatus: ragSystem.getStatus()
+    });
+  });
+});
 
 // API 路由
 
@@ -65,7 +121,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// 问答接口
+// 问答接口（增强版）
 app.post("/api/ask", async (req, res) => {
   try {
     if (!isSystemReady) {
@@ -74,7 +130,11 @@ app.post("/api/ask", async (req, res) => {
       });
     }
 
-    const { question } = req.body;
+    const { 
+      question, 
+      topK = 3, 
+      similarityThreshold = 0.0 
+    } = req.body;
 
     if (!question || typeof question !== "string") {
       return res.status(400).json({
@@ -82,11 +142,31 @@ app.post("/api/ask", async (req, res) => {
       });
     }
 
-    const answer = await ragSystem.ask(question.trim());
+    // 使用增强的问答方法
+    const result = await ragSystem.askWithDetails(question.trim(), {
+      topK: parseInt(topK),
+      similarityThreshold: parseFloat(similarityThreshold)
+    });
 
     res.json({
       question,
-      answer,
+      answer: result.answer,
+      retrievalDetails: {
+        searchResults: result.retrievalDetails.searchResults.map(r => ({
+          document: {
+            content: r.document.pageContent,
+            metadata: r.document.metadata
+          },
+          similarity: r.similarity,
+          index: r.index
+        })),
+        queryEmbedding: result.retrievalDetails.queryEmbedding.slice(0, 10), // 只返回前10维用于显示
+        threshold: result.retrievalDetails.threshold,
+        topK: result.retrievalDetails.topK,
+        totalDocuments: result.retrievalDetails.totalDocuments,
+        searchTime: result.retrievalDetails.searchTime
+      },
+      context: result.context,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -98,37 +178,72 @@ app.post("/api/ask", async (req, res) => {
   }
 });
 
-// 文件上传接口
-app.post("/api/upload", upload.single("file"), async (req, res) => {
+// 文件上传接口（支持多文件）
+app.post("/api/upload", upload.array("files", 10), async (req, res) => {
   try {
-    if (!req.file) {
+    const files = req.files as Express.Multer.File[];
+    
+    if (!files || files.length === 0) {
       return res.status(400).json({
         error: "请选择要上传的文件",
       });
     }
 
-    // 读取上传的文件内容
-    const fileContent = fs.readFileSync(req.file.path, "utf8");
-    const originalName = req.file.originalname;
+    const uploadResults = [];
+    const errors = [];
 
-    // 保存到数据目录并添加到 RAG 系统
-    await ragSystem.saveUploadedFile(originalName, fileContent, "./data");
+    // 处理每个文件
+    for (const file of files) {
+      try {
+        // 读取上传的文件内容
+        const fileContent = fs.readFileSync(file.path, "utf8");
+        const originalName = file.originalname;
 
-    // 清理临时文件
-    fs.unlinkSync(req.file.path);
+        // 保存到数据目录并添加到 RAG 系统
+        await ragSystem.saveUploadedFile(originalName, fileContent, "./data");
+
+        // 清理临时文件
+        fs.unlinkSync(file.path);
+
+        uploadResults.push({
+          filename: originalName,
+          size: file.size,
+          status: "success"
+        });
+
+        console.log(`文件上传成功: ${originalName}`);
+      } catch (error) {
+        console.error(`文件 ${file.originalname} 上传失败:`, error);
+        
+        // 清理临时文件
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+
+        errors.push({
+          filename: file.originalname,
+          error: error instanceof Error ? error.message : "未知错误"
+        });
+      }
+    }
 
     res.json({
-      message: "文件上传成功",
-      filename: originalName,
-      size: req.file.size,
+      message: `成功上传 ${uploadResults.length} 个文件${errors.length > 0 ? `，${errors.length} 个文件失败` : ''}`,
+      results: uploadResults,
+      errors: errors,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("文件上传错误:", error);
     
-    // 清理临时文件
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
+    // 清理所有临时文件
+    const files = req.files as Express.Multer.File[];
+    if (files) {
+      files.forEach(file => {
+        if (fs.existsSync(file.path)) {
+          fs.unlinkSync(file.path);
+        }
+      });
     }
 
     res.status(500).json({
@@ -255,11 +370,12 @@ async function startServer() {
   await initializeSystem();
 
   // 启动服务器
-  app.listen(PORT, () => {
+  server.listen(PORT, () => {
     console.log(`🚀 服务器运行在 http://localhost:${PORT}`);
     console.log(`📚 RAG 系统状态: ${isSystemReady ? '就绪' : '未就绪'}`);
     console.log(`📁 数据目录: ./data`);
     console.log(`🌐 Web 界面: http://localhost:${PORT}`);
+    console.log(`🔌 WebSocket 连接已启用`);
   });
 }
 
