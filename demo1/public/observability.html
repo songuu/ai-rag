@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔍 RAG 可观测性仪表盘 - Langfuse 风格</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        .trace-tree {
+            font-family: 'Courier New', monospace;
+        }
+        .observation-node {
+            border-left: 2px solid #e5e7eb;
+            margin-left: 1rem;
+            padding-left: 1rem;
+        }
+        .generation-node {
+            border-left-color: #3b82f6;
+        }
+        .span-node {
+            border-left-color: #10b981;
+        }
+        .event-node {
+            border-left-color: #f59e0b;
+        }
+        .trace-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .stats-card {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        }
+        .performance-card {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- 顶部导航 -->
+    <nav class="bg-white shadow-sm border-b">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between h-16">
+                <div class="flex items-center">
+                    <div class="flex-shrink-0">
+                        <h1 class="text-xl font-bold text-gray-900">
+                            <i class="fas fa-chart-line mr-2 text-blue-600"></i>
+                            RAG 可观测性仪表盘
+                        </h1>
+                    </div>
+                    <div class="ml-6 flex space-x-8">
+                        <a href="/" class="text-gray-500 hover:text-gray-700 px-3 py-2 text-sm font-medium">
+                            <i class="fas fa-home mr-1"></i>主界面
+                        </a>
+                        <a href="#traces" class="text-blue-600 px-3 py-2 text-sm font-medium">
+                            <i class="fas fa-search mr-1"></i>Traces
+                        </a>
+                        <a href="#analytics" class="text-gray-500 hover:text-gray-700 px-3 py-2 text-sm font-medium">
+                            <i class="fas fa-chart-bar mr-1"></i>分析
+                        </a>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button id="refresh-btn" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700">
+                        <i class="fas fa-sync-alt mr-1"></i>刷新
+                    </button>
+                    <button id="clear-btn" class="bg-red-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-red-700">
+                        <i class="fas fa-trash mr-1"></i>清除数据
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- 统计卡片 -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+            <!-- 总 Traces -->
+            <div class="stats-card rounded-xl p-6 text-white">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-white/80 text-sm">总 Traces</p>
+                        <p id="total-traces" class="text-2xl font-bold">0</p>
+                    </div>
+                    <div class="bg-white/20 rounded-full p-3">
+                        <i class="fas fa-search text-xl"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 成功率 -->
+            <div class="performance-card rounded-xl p-6 text-white">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-white/80 text-sm">成功率</p>
+                        <p id="success-rate" class="text-2xl font-bold">0%</p>
+                    </div>
+                    <div class="bg-white/20 rounded-full p-3">
+                        <i class="fas fa-check-circle text-xl"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 平均耗时 -->
+            <div class="bg-gradient-to-r from-green-400 to-blue-500 rounded-xl p-6 text-white">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-white/80 text-sm">平均耗时</p>
+                        <p id="avg-duration" class="text-2xl font-bold">0ms</p>
+                    </div>
+                    <div class="bg-white/20 rounded-full p-3">
+                        <i class="fas fa-clock text-xl"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 总 Tokens -->
+            <div class="bg-gradient-to-r from-purple-400 to-pink-500 rounded-xl p-6 text-white">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="text-white/80 text-sm">总 Tokens</p>
+                        <p id="total-tokens" class="text-2xl font-bold">0</p>
+                    </div>
+                    <div class="bg-white/20 rounded-full p-3">
+                        <i class="fas fa-coins text-xl"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 主要内容区域 -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- Traces 列表 -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-xl shadow-sm border">
+                    <div class="px-6 py-4 border-b">
+                        <h2 class="text-lg font-semibold text-gray-900">
+                            <i class="fas fa-list mr-2 text-blue-600"></i>
+                            最近的 Traces
+                        </h2>
+                    </div>
+                    <div class="p-6">
+                        <div id="traces-list" class="space-y-4">
+                            <!-- Traces 将在这里显示 -->
+                            <div class="text-center text-gray-500 py-8">
+                                <i class="fas fa-search text-3xl mb-2"></i>
+                                <p>暂无 Traces 数据</p>
+                                <p class="text-sm">开始提问以生成 Traces</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 详情面板 -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-xl shadow-sm border">
+                    <div class="px-6 py-4 border-b">
+                        <h2 class="text-lg font-semibold text-gray-900">
+                            <i class="fas fa-info-circle mr-2 text-green-600"></i>
+                            Trace 详情
+                        </h2>
+                    </div>
+                    <div class="p-6">
+                        <div id="trace-details" class="text-center text-gray-500">
+                            <i class="fas fa-mouse-pointer text-3xl mb-2"></i>
+                            <p>点击 Trace 查看详情</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 性能图表 -->
+                <div class="bg-white rounded-xl shadow-sm border mt-6">
+                    <div class="px-6 py-4 border-b">
+                        <h2 class="text-lg font-semibold text-gray-900">
+                            <i class="fas fa-chart-area mr-2 text-purple-600"></i>
+                            性能趋势
+                        </h2>
+                    </div>
+                    <div class="p-6">
+                        <div id="performance-chart" style="width: 100%; height: 200px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trace 详情模态框 -->
+    <div id="trace-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50">
+        <div class="flex items-center justify-center min-h-screen p-4">
+            <div class="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+                <div class="trace-header px-6 py-4 text-white">
+                    <div class="flex items-center justify-between">
+                        <h3 class="text-lg font-semibold">
+                            <i class="fas fa-search mr-2"></i>
+                            Trace 详情
+                        </h3>
+                        <button id="close-modal" class="text-white hover:text-gray-200">
+                            <i class="fas fa-times text-xl"></i>
+                        </button>
+                    </div>
+                </div>
+                <div class="p-6 overflow-y-auto max-h-[calc(90vh-80px)]">
+                    <div id="modal-trace-content">
+                        <!-- Trace 详情内容 -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="observability.js"></script>
+</body>
+</html>

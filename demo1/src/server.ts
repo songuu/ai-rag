@@ -6,6 +6,7 @@ import fs from "fs";
 import { createServer } from "http";
 import { Server } from "socket.io";
 import { LocalRAGSystem } from "./rag-system";
+import { type Trace } from "./observability";
 
 const app = express();
 const server = createServer(app);
@@ -58,6 +59,11 @@ const ragSystem = new LocalRAGSystem({
     // 向所有连接的客户端发送查询向量化进度
     io.emit('query-vectorization-progress', progress);
     console.log(`查询向量化: ${progress.status} - "${progress.query}"`);
+  },
+  onTraceUpdate: (trace) => {
+    // 🎯 Langfuse 风格的 Trace 更新
+    io.emit('trace-update', trace);
+    console.log(`🔍 Trace 更新: ${trace.name} [${trace.status}] - ${trace.observations.length} observations`);
   }
 });
 
@@ -145,7 +151,9 @@ app.post("/api/ask", async (req, res) => {
     // 使用增强的问答方法
     const result = await ragSystem.askWithDetails(question.trim(), {
       topK: parseInt(topK),
-      similarityThreshold: parseFloat(similarityThreshold)
+      similarityThreshold: parseFloat(similarityThreshold),
+      userId: req.body.userId,
+      sessionId: req.body.sessionId
     });
 
     res.json({
@@ -167,6 +175,7 @@ app.post("/api/ask", async (req, res) => {
         searchTime: result.retrievalDetails.searchTime
       },
       context: result.context,
+      traceId: result.traceId,
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -363,6 +372,96 @@ async function startServer() {
   dirs.forEach(dir => {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
+    }
+  });
+
+  // 🎯 可观测性 API 端点
+
+  // 获取所有 Traces
+  app.get("/api/traces", async (req, res) => {
+    try {
+      const observabilityData = ragSystem.getObservabilityData();
+      res.json({
+        success: true,
+        traces: observabilityData.traces,
+        stats: observabilityData.stats
+      });
+    } catch (error) {
+      console.error("获取 Traces 错误:", error);
+      res.status(500).json({
+        error: "获取 Traces 失败",
+        details: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // 获取特定 Trace
+  app.get("/api/traces/:traceId", async (req, res) => {
+    try {
+      const { traceId } = req.params;
+      const trace = ragSystem.getTrace(traceId);
+      
+      if (!trace) {
+        return res.status(404).json({
+          error: "Trace 不存在"
+        });
+      }
+      
+      res.json({
+        success: true,
+        trace
+      });
+    } catch (error) {
+      console.error("获取 Trace 错误:", error);
+      res.status(500).json({
+        error: "获取 Trace 失败",
+        details: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // 添加用户反馈
+  app.post("/api/traces/:traceId/feedback", async (req, res) => {
+    try {
+      const { traceId } = req.params;
+      const { score, comment } = req.body;
+      
+      if (score === undefined) {
+        return res.status(400).json({
+          error: "请提供评分"
+        });
+      }
+      
+      const scoreId = ragSystem.addUserFeedback(traceId, score, comment);
+      
+      res.json({
+        success: true,
+        scoreId,
+        message: "反馈已记录"
+      });
+    } catch (error) {
+      console.error("添加反馈错误:", error);
+      res.status(500).json({
+        error: "添加反馈失败",
+        details: error instanceof Error ? error.message : String(error),
+      });
+    }
+  });
+
+  // 清除可观测性数据
+  app.delete("/api/traces", async (req, res) => {
+    try {
+      ragSystem.clearObservabilityData();
+      res.json({
+        success: true,
+        message: "可观测性数据已清除"
+      });
+    } catch (error) {
+      console.error("清除数据错误:", error);
+      res.status(500).json({
+        error: "清除数据失败",
+        details: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 

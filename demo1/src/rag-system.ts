@@ -5,6 +5,7 @@ import { StringOutputParser } from "@langchain/core/output_parsers";
 import { Document } from "@langchain/core/documents";
 import fs from "fs";
 import path from "path";
+import { ObservabilityEngine, type Trace, type Observation } from "./observability";
 
 // Token 信息接口
 interface TokenInfo {
@@ -624,6 +625,8 @@ export class LocalRAGSystem {
   private onVectorizationProgress?: (progress: VectorizationProgress) => void;
   private onRetrievalDetails?: (details: RetrievalDetails) => void;
   private onQueryVectorizationProgress?: (progress: QueryVectorizationProgress) => void;
+  private observabilityEngine: ObservabilityEngine;
+  private onTraceUpdate?: (trace: Trace) => void;
 
   constructor(
     private config: {
@@ -634,6 +637,7 @@ export class LocalRAGSystem {
       onVectorizationProgress?: (progress: VectorizationProgress) => void;
       onRetrievalDetails?: (details: RetrievalDetails) => void;
       onQueryVectorizationProgress?: (progress: QueryVectorizationProgress) => void;
+      onTraceUpdate?: (trace: Trace) => void;
     } = {}
   ) {
     const {
@@ -643,6 +647,7 @@ export class LocalRAGSystem {
       onVectorizationProgress,
       onRetrievalDetails,
       onQueryVectorizationProgress,
+      onTraceUpdate,
     } = config;
 
     this.llm = new Ollama({
@@ -659,6 +664,18 @@ export class LocalRAGSystem {
     this.onVectorizationProgress = onVectorizationProgress;
     this.onRetrievalDetails = onRetrievalDetails;
     this.onQueryVectorizationProgress = onQueryVectorizationProgress;
+    this.onTraceUpdate = onTraceUpdate;
+    
+    // 初始化可观测性引擎
+    this.observabilityEngine = new ObservabilityEngine({
+      onTraceUpdate: this.onTraceUpdate,
+      onObservationUpdate: (observation) => {
+        console.log('Observation updated:', observation.name);
+      },
+      onScoreUpdate: (score) => {
+        console.log('Score updated:', score.name, score.value);
+      }
+    });
 
     this.vectorStore = new SimpleMemoryVectorStore(
       this.embeddings, 
@@ -791,70 +808,207 @@ export class LocalRAGSystem {
     options: {
       topK?: number;
       similarityThreshold?: number;
+      userId?: string;
+      sessionId?: string;
     } = {}
   ): Promise<{
     answer: string;
     retrievalDetails: RetrievalDetails;
     context: string;
+    traceId: string;
   }> {
     if (!this.isInitialized) {
       throw new Error("RAG 系统尚未初始化，请先调用 initializeDatabase()");
     }
 
-    const { topK = 3, similarityThreshold = 0.0 } = options;
+    const { topK = 3, similarityThreshold = 0.0, userId, sessionId } = options;
 
-    console.log(`用户问题: ${question}`);
-    console.log(`检索参数: Top-K=${topK}, 相似度阈值=${similarityThreshold}`);
-
-    // 1. 检索相似内容（带详细信息）
-    const retrievalDetails = await this.vectorStore.similaritySearchWithDetails(
-      question, 
-      topK, 
-      similarityThreshold
-    );
-
-    // 发送检索详情到回调
-    if (this.onRetrievalDetails) {
-      this.onRetrievalDetails(retrievalDetails);
-    }
-
-    const context = retrievalDetails.searchResults
-      .map((result, index) => 
-        `[文档${index + 1}] (相似度: ${result.similarity.toFixed(4)}) (来源: ${result.document.metadata?.source || 'Unknown'})\n${result.document.pageContent}`
-      )
-      .join("\n---\n");
-
-    console.log(`检索到 ${retrievalDetails.searchResults.length} 个相关文档`);
-
-    // 2. 构造 Prompt 模板
-    const prompt = ChatPromptTemplate.fromTemplate(`
-      你是一个专业的知识库助手。请根据下方提供的上下文信息来回答用户的问题。
-      
-      【上下文信息】：
-      {context}
-      
-      【用户问题】：
-      {question}
-      
-      如果上下文信息中不包含答案，请礼貌地说明你不知道，不要胡乱编造。
-      请使用中文回答，回答要简洁明了。
-    `);
-
-    // 3. 运行链式调用
-    const chain = prompt.pipe(this.llm).pipe(new StringOutputParser());
-
-    const result = await chain.invoke({
-      context: context,
-      question: question,
+    // 🎯 创建 Trace（Langfuse 风格）
+    const traceId = this.observabilityEngine.createTrace({
+      name: 'RAG Query',
+      userId,
+      sessionId,
+      input: { question, topK, similarityThreshold },
+      metadata: {
+        model: this.llm.model,
+        embeddingModel: this.embeddings.model,
+        timestamp: new Date().toISOString()
+      },
+      tags: ['rag', 'question-answering']
     });
 
-    console.log(`AI 回答: \n${result}\n`);
-    
-    return {
-      answer: result,
-      retrievalDetails,
-      context
-    };
+    console.log(`🔍 [Trace ${traceId}] 用户问题: ${question}`);
+    console.log(`📊 检索参数: Top-K=${topK}, 相似度阈值=${similarityThreshold}`);
+
+    try {
+      // 🔍 阶段1: 查询理解与向量化 (Span)
+      const querySpanId = this.observabilityEngine.createSpan({
+        traceId,
+        name: 'Query Understanding & Vectorization',
+        input: { question },
+        metadata: { stage: 'query_processing' }
+      });
+
+      // 🔍 阶段2: 向量检索 (Span)
+      const retrievalSpanId = this.observabilityEngine.createSpan({
+        traceId,
+        name: 'Vector Retrieval',
+        parentObservationId: querySpanId,
+        input: { question, topK, similarityThreshold },
+        metadata: { stage: 'retrieval' }
+      });
+
+      // 执行检索
+      const retrievalDetails = await this.vectorStore.similaritySearchWithDetails(
+        question, 
+        topK, 
+        similarityThreshold,
+        (progress) => {
+          // 查询向量化进度事件
+          this.observabilityEngine.createEvent({
+            traceId,
+            parentObservationId: querySpanId,
+            name: 'Query Vectorization Progress',
+            input: { progress },
+            metadata: { stage: progress.status }
+          });
+          
+          if (this.onQueryVectorizationProgress) {
+            this.onQueryVectorizationProgress(progress);
+          }
+        }
+      );
+
+      // 更新检索 Span
+      this.observabilityEngine.updateObservation(retrievalSpanId, {
+        output: {
+          totalDocuments: retrievalDetails.totalDocuments,
+          matchedDocuments: retrievalDetails.searchResults.length,
+          searchTime: retrievalDetails.searchTime,
+          topResults: retrievalDetails.searchResults.map(r => ({
+            similarity: r.similarity,
+            source: r.document.metadata?.source,
+            contentPreview: r.document.pageContent.substring(0, 100) + '...'
+          }))
+        },
+        endTime: new Date(),
+        metadata: { 
+          stage: 'retrieval',
+          performance: {
+            searchTime: retrievalDetails.searchTime,
+            documentsScanned: retrievalDetails.totalDocuments,
+            documentsMatched: retrievalDetails.searchResults.length
+          }
+        }
+      });
+
+      // 发送检索详情到回调
+      if (this.onRetrievalDetails) {
+        this.onRetrievalDetails(retrievalDetails);
+      }
+
+      // 构造上下文
+      const context = retrievalDetails.searchResults
+        .map((result, index) => 
+          `[文档${index + 1}] (相似度: ${result.similarity.toFixed(4)}) (来源: ${result.document.metadata?.source || 'Unknown'})\n${result.document.pageContent}`
+        )
+        .join("\n---\n");
+
+      console.log(`📚 检索到 ${retrievalDetails.searchResults.length} 个相关文档`);
+
+      // 🤖 阶段3: LLM 生成 (Generation)
+      const generationId = this.observabilityEngine.createGeneration({
+        traceId,
+        name: 'Answer Generation',
+        input: { question, context },
+        model: this.llm.model,
+        modelParameters: {
+          temperature: 0,
+        },
+        metadata: { stage: 'generation' }
+      });
+
+      // 构造 Prompt 模板
+      const prompt = ChatPromptTemplate.fromTemplate(`
+        你是一个专业的知识库助手。请根据下方提供的上下文信息来回答用户的问题。
+        
+        【上下文信息】：
+        {context}
+        
+        【用户问题】：
+        {question}
+        
+        如果上下文信息中不包含答案，请礼貌地说明你不知道，不要胡乱编造。
+        请使用中文回答，回答要简洁明了。
+      `);
+
+      // 运行链式调用
+      const chain = prompt.pipe(this.llm).pipe(new StringOutputParser());
+      const startTime = Date.now();
+      
+      const result = await chain.invoke({
+        context: context,
+        question: question,
+      });
+
+      const endTime = Date.now();
+      const generationTime = endTime - startTime;
+
+      // 更新 Generation
+      this.observabilityEngine.updateObservation(generationId, {
+        output: result,
+        endTime: new Date(),
+        usage: {
+          promptTokens: Math.ceil(context.length / 4), // 估算
+          completionTokens: Math.ceil(result.length / 4), // 估算
+          totalTokens: Math.ceil((context.length + result.length) / 4)
+        },
+        metadata: {
+          stage: 'generation',
+          performance: {
+            generationTime,
+            contextLength: context.length,
+            responseLength: result.length
+          }
+        }
+      });
+
+      // 🎯 完成 Trace
+      this.observabilityEngine.updateTrace(traceId, {
+        output: { answer: result, context },
+        status: 'SUCCESS',
+        endTime: new Date(),
+        metadata: {
+          totalTime: Date.now() - new Date(this.observabilityEngine.getTrace(traceId)!.startTime).getTime(),
+          retrievedDocuments: retrievalDetails.searchResults.length,
+          performance: {
+            queryTime: retrievalDetails.queryVectorizationTime,
+            searchTime: retrievalDetails.searchTime,
+            generationTime
+          }
+        }
+      });
+
+      console.log(`🤖 AI 回答: \n${result}\n`);
+      
+      return {
+        answer: result,
+        retrievalDetails,
+        context,
+        traceId
+      };
+
+    } catch (error) {
+      // 错误处理
+      this.observabilityEngine.updateTrace(traceId, {
+        status: 'ERROR',
+        endTime: new Date(),
+        metadata: { error: error instanceof Error ? error.message : String(error) }
+      });
+      
+      console.error(`❌ [Trace ${traceId}] 错误:`, error);
+      throw error;
+    }
   }
 
   /**
@@ -878,6 +1032,43 @@ export class LocalRAGSystem {
       documentCount: this.vectorStore.getDocumentCount(),
       embeddingDimension: this.vectorStore.getEmbeddingDimension()
     };
+  }
+
+  /**
+   * 获取可观测性数据
+   */
+  getObservabilityData() {
+    return {
+      traces: this.observabilityEngine.getAllTraces(),
+      stats: this.observabilityEngine.getTraceStats()
+    };
+  }
+
+  /**
+   * 获取特定 Trace
+   */
+  getTrace(traceId: string) {
+    return this.observabilityEngine.getTrace(traceId);
+  }
+
+  /**
+   * 添加用户反馈评分
+   */
+  addUserFeedback(traceId: string, score: number | boolean, comment?: string) {
+    return this.observabilityEngine.addScore({
+      traceId,
+      name: 'user_feedback',
+      value: score,
+      source: 'USER',
+      comment
+    });
+  }
+
+  /**
+   * 清除可观测性数据
+   */
+  clearObservabilityData() {
+    this.observabilityEngine.clear();
   }
 
   /**
