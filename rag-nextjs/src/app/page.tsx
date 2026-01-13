@@ -257,63 +257,111 @@ export default function HomePage() {
   // 保存消息到 IndexedDB
   const saveMessageToDB = async (message: ConversationMessage) => {
     try {
+      console.log('[IndexedDB] 保存消息:', message.id, message.type);
       await dbManager.init();
       
       if (!currentConversationId) {
+        console.log('[IndexedDB] 创建新对话');
         const conversation = await dbManager.createNewConversation(
           message.content.substring(0, 50) + (message.content.length > 50 ? '...' : '')
         );
         setCurrentConversationId(conversation.id);
+        console.log('[IndexedDB] 新对话 ID:', conversation.id);
       }
       
       if (currentConversationId) {
-        await dbManager.addMessageToConversation(currentConversationId, message);
+        // 确保时间戳是 Date 对象
+        const messageToSave: ConversationMessage = {
+          ...message,
+          timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp)
+        };
+        
+        await dbManager.addMessageToConversation(currentConversationId, messageToSave);
+        console.log('[IndexedDB] 消息已保存到对话:', currentConversationId);
       }
     } catch (error) {
-      console.error('保存消息到数据库失败:', error);
+      console.error('[IndexedDB] 保存消息到数据库失败:', error);
+      showToast('保存消息失败: ' + (error instanceof Error ? error.message : String(error)), 'error');
     }
   };
 
   // 从 IndexedDB 加载最新对话
   const loadLatestConversation = async () => {
     try {
+      console.log('[IndexedDB] 开始加载最新对话...');
       await dbManager.init();
+      
+      // 先尝试获取所有对话，看看数据库里有什么
+      const allConversations = await dbManager.getAllConversations();
+      console.log(`[IndexedDB] 数据库中共有 ${allConversations.length} 个对话`);
+      
+      if (allConversations.length > 0) {
+        allConversations.forEach((conv, index) => {
+          console.log(`[IndexedDB] 对话 ${index + 1}: ID=${conv.id}, 消息数=${conv.messages?.length || 0}, 更新时间=${conv.updatedAt}`);
+        });
+      }
+      
       const latestConv = await dbManager.getLatestConversation();
-      if (latestConv && latestConv.messages.length > 0) {
-        setCurrentConversationId(latestConv.id);
+      
+      if (latestConv) {
+        console.log(`[IndexedDB] 找到最新对话: ${latestConv.id}`);
+        console.log(`[IndexedDB] 对话消息数: ${latestConv.messages?.length || 0}`);
         
-        const restoredMessages: Message[] = latestConv.messages.map(msg => ({
-          id: msg.id,
-          type: msg.type,
-          content: msg.content,
-          timestamp: new Date(msg.timestamp),
-          traceId: msg.traceId,
-          retrievalDetails: msg.retrievalDetails,
-          queryAnalysis: msg.queryAnalysis
-        }));
-        
-        setMessages(restoredMessages);
-        
-        const lastAssistantMessage = restoredMessages
-          .filter(m => m.type === 'assistant' && m.retrievalDetails)
-          .pop();
-        if (lastAssistantMessage?.retrievalDetails) {
-          setRetrievalDetails(lastAssistantMessage.retrievalDetails);
-        }
-        
-        const lastUserMessage = restoredMessages
-          .filter(m => m.type === 'user' && m.queryAnalysis)
-          .pop();
-        if (lastUserMessage?.queryAnalysis) {
-          setQueryAnalysis(lastUserMessage.queryAnalysis);
-          setShowQueryAnalysis(true);
-          if (lastUserMessage.queryAnalysis.embedding?.semanticAnalysis?.vectorFeatures) {
-            setRadarChartData(lastUserMessage.queryAnalysis.embedding.semanticAnalysis.vectorFeatures);
+        if (latestConv.messages && latestConv.messages.length > 0) {
+          setCurrentConversationId(latestConv.id);
+          
+          // 确保时间戳正确转换
+          const restoredMessages: Message[] = latestConv.messages.map((msg, index) => {
+            const timestamp = msg.timestamp instanceof Date 
+              ? msg.timestamp 
+              : new Date(msg.timestamp);
+            
+            console.log(`[IndexedDB] 消息 ${index + 1}: ${msg.type}, ID=${msg.id}, 内容长度=${msg.content?.length || 0}`);
+            
+            return {
+              id: msg.id,
+              type: msg.type,
+              content: msg.content,
+              timestamp,
+              traceId: msg.traceId,
+              retrievalDetails: msg.retrievalDetails || null,
+              queryAnalysis: msg.queryAnalysis || null
+            };
+          });
+          
+          setMessages(restoredMessages);
+          console.log(`[IndexedDB] 已恢复 ${restoredMessages.length} 条消息到界面`);
+          
+          // 恢复最后一条助手消息的检索详情
+          const lastAssistantMessage = restoredMessages
+            .filter(m => m.type === 'assistant' && m.retrievalDetails)
+            .pop();
+          if (lastAssistantMessage?.retrievalDetails) {
+            setRetrievalDetails(lastAssistantMessage.retrievalDetails);
+            console.log('[IndexedDB] 已恢复检索详情');
           }
+          
+          // 恢复最后一条用户消息的查询分析
+          const lastUserMessage = restoredMessages
+            .filter(m => m.type === 'user' && m.queryAnalysis)
+            .pop();
+          if (lastUserMessage?.queryAnalysis) {
+            setQueryAnalysis(lastUserMessage.queryAnalysis);
+            setShowQueryAnalysis(true);
+            if (lastUserMessage.queryAnalysis.embedding?.semanticAnalysis?.vectorFeatures) {
+              setRadarChartData(lastUserMessage.queryAnalysis.embedding.semanticAnalysis.vectorFeatures);
+            }
+            console.log('[IndexedDB] 已恢复查询分析数据');
+          }
+          
+          showToast(`已恢复 ${restoredMessages.length} 条历史消息`, 'success');
+        } else {
+          console.warn('[IndexedDB] 对话存在但没有消息');
+          setCurrentConversationId(latestConv.id);
+          setMessages([]);
         }
-        
-        showToast(`已恢复 ${restoredMessages.length} 条历史消息`, 'info');
       } else {
+        console.log('[IndexedDB] 没有找到历史对话');
         setMessages([]);
         setCurrentConversationId(null);
         setQueryAnalysis(null);
@@ -322,8 +370,12 @@ export default function HomePage() {
         setShowQueryAnalysis(false);
       }
     } catch (error) {
-      console.error('加载历史对话失败:', error);
-      showToast('加载历史对话失败', 'error');
+      console.error('[IndexedDB] 加载历史对话失败:', error);
+      console.error('[IndexedDB] 错误详情:', error instanceof Error ? error.stack : String(error));
+      showToast('加载历史对话失败: ' + (error instanceof Error ? error.message : String(error)), 'error');
+      // 即使失败，也清空状态
+      setMessages([]);
+      setCurrentConversationId(null);
     }
   };
 
