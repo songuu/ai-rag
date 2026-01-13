@@ -4,7 +4,6 @@ import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { Document } from "@langchain/core/documents";
 import { ObservabilityEngine, type Trace } from "./observability";
-import { AutoTokenizer } from "@xenova/transformers";
 
 // 接口定义
 export interface TokenInfo {
@@ -76,232 +75,85 @@ export interface RetrievalDetails {
   searchResults: SimilaritySearchResult[];
 }
 
-// 使用 @xenova/transformers 的词元化器
+// 简化的词元化器
 class SimpleTokenizer {
-  private tokenizer: any = null;
-  private loadingPromise: Promise<void> | null = null;
-  private modelName: string = 'Xenova/bert-base-multilingual-cased'; // 支持中英文的多语言模型
-  private initialized: boolean = false;
+  private vocabulary: Map<string, number> = new Map();
 
   constructor() {
-    // 延迟加载，不在构造函数中初始化
-    // 注意：在 Node.js 环境中，@xenova/transformers 会自动使用 ONNX Runtime
+    this.initializeVocabulary();
   }
 
-  /**
-   * 初始化 tokenizer（异步加载模型）
-   */
-  private async initialize(): Promise<void> {
-    if (this.tokenizer) {
-      return; // 已经初始化
-    }
+  private initializeVocabulary() {
+    const vocabularyData = [
+      // 特殊 tokens
+      { token: '<|pad|>', id: 0 },
+      { token: '<|unk|>', id: 1 },
+      
+      // 常用标点
+      { token: '.', id: 10 }, { token: ',', id: 11 }, { token: '?', id: 12 },
+      { token: '!', id: 13 }, { token: ':', id: 14 },
+      
+      // 英文词汇
+      { token: 'the', id: 100 }, { token: 'and', id: 101 }, { token: 'or', id: 102 },
+      { token: 'AI', id: 200 }, { token: 'machine', id: 201 }, { token: 'learn', id: 202 },
+      
+      // 中文词汇
+      { token: '的', id: 1000 }, { token: '是', id: 1001 }, { token: '在', id: 1002 },
+      { token: '智能', id: 2004 }, { token: '人工智能', id: 2006 },
+      { token: '手机', id: 3002 }, { token: '苹果', id: 3005 },
+      { token: '什么', id: 4002 }, { token: '如何', id: 4008 }
+    ];
 
-    if (this.loadingPromise) {
-      return this.loadingPromise; // 正在加载，等待完成
-    }
+    vocabularyData.forEach(({ token, id }) => {
+      this.vocabulary.set(token, id);
+    });
+  }
 
-    this.loadingPromise = (async () => {
-      try {
-        console.log(`[Tokenizer] 开始加载模型: ${this.modelName}`);
-        
-        // 使用 AutoTokenizer 自动加载模型
-        // 这个模型支持中文、英文等多种语言
-        // 在 Node.js 环境中，会自动使用 ONNX Runtime
-        this.tokenizer = await AutoTokenizer.from_pretrained(this.modelName, {
-          // 可选：设置本地缓存路径
-          // cache_dir: './models',
-          // 在服务器端运行时，可以禁用进度回调以提高性能
-          progress_callback: undefined,
-        });
-        
-        this.initialized = true;
-        console.log(`[Tokenizer] 模型加载成功: ${this.modelName}`);
-      } catch (error) {
-        console.error('[Tokenizer] 模型加载失败:', error);
-        this.initialized = false;
-        // 如果加载失败，抛出错误
-        throw new Error(`Tokenizer initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+  tokenize(text: string): TokenInfo[] {
+    const tokens: TokenInfo[] = [];
+    let position = 0;
+
+    // 简化的分词逻辑
+    for (let i = 0; i < text.length; i++) {
+      let bestMatch = '';
+      let bestMatchId = 1; // 默认为 <|unk|>
+
+      // 尝试匹配最长的词汇
+      for (let len = Math.min(8, text.length - i); len >= 1; len--) {
+        const candidate = text.substring(i, i + len);
+        if (this.vocabulary.has(candidate)) {
+          bestMatch = candidate;
+          bestMatchId = this.vocabulary.get(candidate)!;
+          break;
+        }
       }
-    })();
 
-    return this.loadingPromise;
-  }
+      if (!bestMatch) {
+        bestMatch = text[i];
+        bestMatchId = 5000 + text.charCodeAt(i) % 1000;
+      }
 
-  /**
-   * 词元化文本
-   * @param text 要词元化的文本
-   * @returns TokenInfo 数组
-   */
-  async tokenize(text: string): Promise<TokenInfo[]> {
-    // 确保 tokenizer 已初始化
-    await this.initialize();
-
-    if (!this.tokenizer || !this.initialized) {
-      throw new Error('Tokenizer not initialized');
-    }
-
-    // 确保 text 是字符串类型
-    if (typeof text !== 'string') {
-      text = String(text || '');
-    }
-
-    // 如果 text 为空，返回空数组
-    if (!text.trim()) {
-      return [];
-    }
-
-    try {
-      // 使用真实的 tokenizer 进行编码，获取 token IDs
-      const encoded = this.tokenizer.encode(text, {
-        add_special_tokens: true, // 添加特殊 tokens (如 [CLS], [SEP])
-        return_tensors: false, // 返回普通数组而不是张量
+      const tokenType = this.getTokenType(bestMatch);
+      tokens.push({
+        token: bestMatch,
+        tokenId: bestMatchId,
+        position,
+        type: tokenType
       });
 
-      // 使用 tokenizer 的 tokenize 方法获取 token 文本（更准确）
-      // 注意：某些 tokenizer 可能没有 tokenize 方法，所以我们需要从编码结果中获取
-      let tokenTexts: string[] = [];
-      
-      try {
-        // 尝试使用 tokenize 方法（如果可用）
-        if (typeof this.tokenizer.tokenize === 'function') {
-          // 确保 text 是字符串
-          const textStr = typeof text === 'string' ? text : String(text || '');
-          tokenTexts = this.tokenizer.tokenize(textStr);
-        } else {
-          // 如果没有 tokenize 方法，从词汇表中查找
-          const vocab = this.tokenizer.get_vocab();
-          if (vocab && typeof vocab === 'object') {
-            const idToToken = new Map<number, string>();
-            Object.entries(vocab).forEach(([token, id]) => {
-              if (token && typeof id === 'number') {
-                idToToken.set(id, token);
-              }
-            });
-            
-            // 为每个 token ID 查找对应的文本
-            tokenTexts = encoded.map((tokenId: number) => {
-              return idToToken.get(tokenId) || `[UNK:${tokenId}]`;
-            });
-          } else {
-            // 如果无法获取词汇表，使用解码方法
-            tokenTexts = encoded.map((tokenId: number) => {
-              try {
-                const decoded = this.tokenizer.decode([tokenId], { skip_special_tokens: false });
-                return decoded || `[TOKEN:${tokenId}]`;
-              } catch {
-                return `[TOKEN:${tokenId}]`;
-              }
-            });
-          }
-        }
-      } catch (error) {
-        // 如果上述方法都失败，使用词汇表作为后备
-        console.warn('Failed to get token texts, using fallback method:', error);
-        const vocab = this.tokenizer.get_vocab();
-        if (vocab && typeof vocab === 'object') {
-          const idToToken = new Map<number, string>();
-          Object.entries(vocab).forEach(([token, id]) => {
-            if (token && typeof id === 'number') {
-              idToToken.set(id, token);
-            }
-          });
-          tokenTexts = encoded.map((tokenId: number) => {
-            return idToToken.get(tokenId) || `[UNK:${tokenId}]`;
-          });
-        } else {
-          tokenTexts = encoded.map((tokenId: number) => `[TOKEN:${tokenId}]`);
-        }
-      }
-
-      // 确保 tokenTexts 数组长度与 encoded 数组长度一致
-      if (tokenTexts.length !== encoded.length) {
-        // 如果长度不匹配，使用编码结果创建默认 token 文本
-        tokenTexts = encoded.map((tokenId: number, index: number) => {
-          return tokenTexts[index] || `[TOKEN:${tokenId}]`;
-        });
-      }
-
-      // 构建 TokenInfo 数组
-      const tokens: TokenInfo[] = [];
-      let position = 0;
-
-      for (let i = 0; i < encoded.length; i++) {
-        const tokenId = encoded[i];
-        let tokenText = tokenTexts[i] || `[TOKEN:${tokenId}]`;
-
-        // 清理 token 文本（移除 BPE 标记等）
-        tokenText = this.cleanTokenText(tokenText);
-
-        // 确定 token 类型
-        const tokenType = this.getTokenType(tokenText);
-
-        tokens.push({
-          token: tokenText,
-          tokenId: tokenId,
-          position: position++,
-          type: tokenType
-        });
-      }
-
-      return tokens;
-    } catch (error) {
-      console.error('Tokenization error:', error);
-      // 如果出错，返回一个基本的 token 信息
-      return [{
-        token: text,
-        tokenId: 1, // UNK token ID
-        position: 0,
-        type: this.getTokenType(text)
-      }];
+      i += bestMatch.length - 1;
+      position++;
     }
+
+    return tokens;
   }
 
-  /**
-   * 清理 token 文本
-   */
-  private cleanTokenText(text: string): string {
-    // 移除 BPE 标记（如 ## 前缀）
-    return text.replace(/^##/, '').trim();
-  }
-
-  /**
-   * 确定 token 类型
-   */
   private getTokenType(token: string): TokenInfo['type'] {
-    // 检查特殊 tokens
-    if (/^\[(CLS|SEP|PAD|UNK|MASK)\]/i.test(token)) {
-      return 'special';
-    }
-
-    // 检查是否为纯英文
-    if (/^[a-zA-Z]+$/.test(token)) {
-      return 'english';
-    }
-
-    // 检查是否为中文
-    if (/^[\u4e00-\u9fff]+$/.test(token)) {
-      return 'chinese';
-    }
-
-    // 检查是否为数字
-    if (/^[0-9]+$/.test(token)) {
-      return 'number';
-    }
-
-    // 检查是否为标点符号
-    if (/^[.,!?:;()"'\-/\[\]{}]+$/.test(token)) {
-      return 'punctuation';
-    }
-
-    // 混合类型（如中英文混合、数字+字母等）
+    if (/^[a-zA-Z]+$/.test(token)) return 'english';
+    if (/^[\u4e00-\u9fff]+$/.test(token)) return 'chinese';
+    if (/^[0-9]+$/.test(token)) return 'number';
+    if (/^[.,!?:;()"\-/]+$/.test(token)) return 'punctuation';
     return 'special';
-  }
-
-  /**
-   * 获取原始文本（用于显示）
-   */
-  getOriginalText(text: string): string {
-    return text;
   }
 }
 
@@ -370,7 +222,7 @@ class SimpleMemoryVectorStore {
       message: '正在进行词元化...'
     });
 
-    const tokens = await this.tokenizer.tokenize(query);
+    const tokens = this.tokenizer.tokenize(query);
     const tokenizationTime = Date.now() - startTime;
 
     onQueryProgress?.({
