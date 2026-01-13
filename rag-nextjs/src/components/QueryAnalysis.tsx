@@ -75,19 +75,16 @@ export default function QueryAnalysis({
           </div>
           
           {/* BPE 可视化 */}
-          {(analysis.tokenization?.processingSteps || 
-            analysis.tokenization?.vectorWeights || 
-            analysis.tokenization?.densityHeatmap) && (
-            <div className="mt-4 pt-4 border-t border-blue-200">
-              <BPEVisualizations
-                processingSteps={analysis.tokenization?.processingSteps}
-                vectorWeights={analysis.tokenization?.vectorWeights}
-                densityHeatmap={analysis.tokenization?.densityHeatmap}
-                statistics={analysis.tokenization?.statistics}
-                modelInfo={analysis.tokenization?.modelInfo}
-              />
-            </div>
-          )}
+          {/* 始终显示 BPE 可视化组件，让它自己判断是否有数据 */}
+          <div className="mt-4 pt-4 border-t border-blue-200">
+            <BPEVisualizations
+              processingSteps={analysis.tokenization?.processingSteps}
+              vectorWeights={analysis.tokenization?.vectorWeights}
+              densityHeatmap={analysis.tokenization?.densityHeatmap}
+              statistics={analysis.tokenization?.statistics}
+              modelInfo={analysis.tokenization?.modelInfo}
+            />
+          </div>
         </div>
       </div>
       

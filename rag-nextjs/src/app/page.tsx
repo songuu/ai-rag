@@ -476,6 +476,19 @@ export default function HomePage() {
               statistics: data.queryAnalysis.tokenization.statistics,
               modelInfo: data.queryAnalysis.tokenization.modelInfo
             };
+            
+            // 调试日志
+            console.log('[Page] 接收到的 queryAnalysis.tokenization:', {
+              tokenCount: queryAnalysisData.tokenization.tokenCount,
+              tokensLength: queryAnalysisData.tokenization.tokens?.length || 0,
+              processingStepsLength: queryAnalysisData.tokenization.processingSteps?.length || 0,
+              vectorWeightsLength: queryAnalysisData.tokenization.vectorWeights?.length || 0,
+              densityHeatmapLength: queryAnalysisData.tokenization.densityHeatmap?.length || 0,
+              statistics: queryAnalysisData.tokenization.statistics,
+              modelInfo: queryAnalysisData.tokenization.modelInfo
+            });
+          } else {
+            console.warn('[Page] queryAnalysis.tokenization 不存在');
           }
           if (data.queryAnalysis.embedding?.semanticAnalysis?.vectorFeatures) {
             setRadarChartData(data.queryAnalysis.embedding.semanticAnalysis.vectorFeatures);

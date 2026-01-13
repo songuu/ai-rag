@@ -57,6 +57,16 @@ export default function BPEVisualizations({
   statistics,
   modelInfo
 }: BPEVisualizationsProps) {
+  // 调试日志
+  React.useEffect(() => {
+    console.log('[BPEVisualizations] 接收到的数据:', {
+      processingSteps: processingSteps?.length || 0,
+      vectorWeights: vectorWeights?.length || 0,
+      densityHeatmap: densityHeatmap?.length || 0,
+      statistics,
+      modelInfo
+    });
+  }, [processingSteps, vectorWeights, densityHeatmap, statistics, modelInfo]);
   // 逻辑瀑布流图表配置
   const getWaterfallChartOption = () => {
     if (!processingSteps || processingSteps.length === 0) return null;
@@ -415,8 +425,15 @@ export default function BPEVisualizations({
       {/* 空状态提示 */}
       {!waterfallOption && !vectorWeightOption && !densityOption && (
         <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200 text-center">
-          <div className="text-sm text-yellow-800">
+          <div className="text-sm text-yellow-800 mb-2">
             暂无 BPE 可视化数据。请先进行查询以生成数据。
+          </div>
+          <div className="text-xs text-yellow-600">
+            <div>Processing Steps: {processingSteps?.length || 0}</div>
+            <div>Vector Weights: {vectorWeights?.length || 0}</div>
+            <div>Density Heatmap: {densityHeatmap?.length || 0}</div>
+            <div>Statistics: {statistics ? '存在' : '不存在'}</div>
+            <div>Model Info: {modelInfo ? '存在' : '不存在'}</div>
           </div>
         </div>
       )}

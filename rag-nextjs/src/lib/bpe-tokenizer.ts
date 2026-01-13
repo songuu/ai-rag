@@ -250,10 +250,17 @@ export class BPETokenizer {
       const trieMatches = this.trieLookup(preprocessed, traceId, processingSteps);
       
       // 步骤 3: 使用 @xenova/transformers 进行 BPE 编码
+      console.log(`[BPE Tokenizer] 开始 BPE 编码，预处理文本: "${preprocessed}"`);
       const bpeResult = await this.encodeWithBPE(preprocessed, traceId, processingSteps);
+      console.log(`[BPE Tokenizer] BPE 编码完成:`, {
+        inputIdsCount: bpeResult.inputIds?.length || 0,
+        tokenTextsCount: bpeResult.tokenTexts?.length || 0,
+        mergesCount: bpeResult.merges?.length || 0
+      });
       
       // 步骤 4: 构建 TokenInfo 数组
       const tokens = this.buildTokenInfos(bpeResult, preprocessed, traceId, processingSteps);
+      console.log(`[BPE Tokenizer] TokenInfo 构建完成: ${tokens.length} 个 tokens`);
       
       // 步骤 5: 添加特殊 tokens
       if (addSpecialTokens) {

@@ -177,10 +177,11 @@ class SimpleMemoryVectorStore {
 
   constructor(
     private embeddingModel: OllamaEmbeddings,
+    private observabilityEngine?: ObservabilityEngine,
     private onProgress?: (progress: VectorizationProgress) => void,
     private onQueryProgress?: (progress: QueryVectorizationProgress) => void
   ) {
-    this.tokenizer = new SimpleTokenizer();
+    this.tokenizer = new SimpleTokenizer(observabilityEngine);
   }
 
   clear() {
@@ -236,25 +237,87 @@ class SimpleMemoryVectorStore {
     });
 
     // 使用 tokenizeWithDetails 获取完整的 BPE 结果（包含可视化数据）
-    const tokenizationResult = await (this.tokenizer as any).tokenizeWithDetails(query, parentTraceId);
+    // 注意：tokenization 仅用于可视化分析，不影响实际的 embedding 过程
+    let tokenizationResult: any;
+    try {
+      console.log(`[VectorStore] 开始 tokenization，查询: "${query}"`);
+      tokenizationResult = await (this.tokenizer as any).tokenizeWithDetails(query, parentTraceId);
+      console.log(`[VectorStore] Tokenization 完成:`, {
+        tokenCount: tokenizationResult.tokens?.length || 0,
+        hasProcessingSteps: !!tokenizationResult.processingSteps?.length,
+        hasVectorWeights: !!tokenizationResult.vectorWeights?.length,
+        hasDensityHeatmap: !!tokenizationResult.densityHeatmap?.length,
+        statistics: tokenizationResult.statistics,
+        modelInfo: tokenizationResult.modelInfo
+      });
+      
+      // 验证结果
+      if (!tokenizationResult || !tokenizationResult.tokens || tokenizationResult.tokens.length === 0) {
+        console.warn('[VectorStore] Tokenization 返回空结果，但继续处理');
+      }
+    } catch (error) {
+      console.error('[VectorStore] Tokenization 失败:', error);
+      console.error('[VectorStore] 错误详情:', error instanceof Error ? error.stack : String(error));
+      // 如果 tokenization 失败，创建一个空的结果，但不影响后续的 embedding
+      tokenizationResult = {
+        tokens: [],
+        originalText: query,
+        processingSteps: [],
+        vectorWeights: [],
+        densityHeatmap: [],
+        statistics: {
+          totalTokens: 0,
+          uniqueTokens: 0,
+          subwordRatio: 0,
+          averageTokenLength: 0,
+          processingTime: 0
+        },
+        modelInfo: {
+          name: 'unknown',
+          vocabSize: 0,
+          mergesCount: 0
+        }
+      };
+    }
     const tokenizationTime = Date.now() - startTime;
 
+    const tokenizationData = {
+      originalText: query,
+      tokenCount: tokenizationResult.tokens?.length || 0,
+      tokens: tokenizationResult.tokens || [],
+      processingTime: tokenizationTime,
+      // BPE 可视化数据
+      processingSteps: tokenizationResult.processingSteps || [],
+      vectorWeights: tokenizationResult.vectorWeights || [],
+      densityHeatmap: tokenizationResult.densityHeatmap || [],
+      statistics: tokenizationResult.statistics || {
+        totalTokens: 0,
+        uniqueTokens: 0,
+        subwordRatio: 0,
+        averageTokenLength: 0,
+        processingTime: tokenizationTime
+      },
+      modelInfo: tokenizationResult.modelInfo || {
+        name: 'unknown',
+        vocabSize: 0,
+        mergesCount: 0
+      }
+    };
+    
+    console.log(`[VectorStore] 准备发送 tokenization 数据:`, {
+      tokenCount: tokenizationData.tokenCount,
+      hasProcessingSteps: tokenizationData.processingSteps.length > 0,
+      hasVectorWeights: tokenizationData.vectorWeights.length > 0,
+      hasDensityHeatmap: tokenizationData.densityHeatmap.length > 0,
+      statistics: tokenizationData.statistics,
+      modelInfo: tokenizationData.modelInfo
+    });
+    
     onQueryProgress?.({
       status: 'tokenizing',
       message: '词元化完成',
       timeTaken: tokenizationTime,
-      tokenization: {
-        originalText: query,
-        tokenCount: tokenizationResult.tokens.length,
-        tokens: tokenizationResult.tokens,
-        processingTime: tokenizationTime,
-        // BPE 可视化数据
-        processingSteps: tokenizationResult.processingSteps,
-        vectorWeights: tokenizationResult.vectorWeights,
-        densityHeatmap: tokenizationResult.densityHeatmap,
-        statistics: tokenizationResult.statistics,
-        modelInfo: tokenizationResult.modelInfo
-      }
+      tokenization: tokenizationData
     });
 
     // 2. 向量化
@@ -408,6 +471,7 @@ export class LocalRAGSystem {
 
     this.vectorStore = new SimpleMemoryVectorStore(
       this.embeddings,
+      this.observabilityEngine,
       config.onVectorizationProgress,
       config.onQueryVectorizationProgress
     );
