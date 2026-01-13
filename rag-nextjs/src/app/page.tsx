@@ -42,6 +42,7 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [topK, setTopK] = useState(3);
   const [threshold, setThreshold] = useState(0.0);
+  const [tokenizerModel, setTokenizerModel] = useState('Xenova/bert-base-multilingual-cased');
   const [queryAnalysis, setQueryAnalysis] = useState<any>(null);
   const [showParams, setShowParams] = useState(true);
   const [showQueryAnalysis, setShowQueryAnalysis] = useState(false);
@@ -452,6 +453,7 @@ export default function HomePage() {
           question: input.trim(),
           topK,
           similarityThreshold: threshold,
+          tokenizerModel,  // 传递 tokenizer 模型
           userId: 'demo-user',
           sessionId: 'demo-session'
         }),
@@ -463,6 +465,18 @@ export default function HomePage() {
         let queryAnalysisData: any;
         if (data.queryAnalysis) {
           queryAnalysisData = data.queryAnalysis;
+          // 确保 tokenization 数据包含 BPE 可视化数据
+          if (data.queryAnalysis.tokenization) {
+            queryAnalysisData.tokenization = {
+              ...data.queryAnalysis.tokenization,
+              // 保留 BPE 可视化数据
+              processingSteps: data.queryAnalysis.tokenization.processingSteps || [],
+              vectorWeights: data.queryAnalysis.tokenization.vectorWeights || [],
+              densityHeatmap: data.queryAnalysis.tokenization.densityHeatmap || [],
+              statistics: data.queryAnalysis.tokenization.statistics,
+              modelInfo: data.queryAnalysis.tokenization.modelInfo
+            };
+          }
           if (data.queryAnalysis.embedding?.semanticAnalysis?.vectorFeatures) {
             setRadarChartData(data.queryAnalysis.embedding.semanticAnalysis.vectorFeatures);
           }
@@ -732,8 +746,10 @@ export default function HomePage() {
                 <ParameterControls
                   topK={topK}
                   threshold={threshold}
+                  tokenizerModel={tokenizerModel}
                   onTopKChange={setTopK}
                   onThresholdChange={setThreshold}
+                  onTokenizerModelChange={setTokenizerModel}
                   showParams={showParams}
                   onToggle={() => setShowParams(!showParams)}
                 />

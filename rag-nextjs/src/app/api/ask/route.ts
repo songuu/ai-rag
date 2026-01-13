@@ -9,7 +9,8 @@ export async function POST(request: NextRequest) {
       topK = 3, 
       similarityThreshold = 0.0,
       userId,
-      sessionId 
+      sessionId,
+      tokenizerModel  // 支持指定 tokenizer 模型
     } = body;
 
     if (!question || typeof question !== "string") {
@@ -25,7 +26,8 @@ export async function POST(request: NextRequest) {
       topK: parseInt(topK),
       similarityThreshold: parseFloat(similarityThreshold),
       userId,
-      sessionId
+      sessionId,
+      tokenizerModel  // 传递 tokenizer 模型参数
     });
 
     return NextResponse.json({
@@ -49,6 +51,7 @@ export async function POST(request: NextRequest) {
       },
       context: result.context,
       traceId: result.traceId,
+      queryAnalysis: result.queryAnalysis,  // 包含 tokenization 和 embedding 数据
       timestamp: new Date().toISOString(),
     });
 

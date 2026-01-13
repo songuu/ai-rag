@@ -2,6 +2,7 @@
 
 import React from 'react';
 import dynamic from 'next/dynamic';
+import BPEVisualizations from './BPEVisualizations';
 
 const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
 
@@ -53,13 +54,14 @@ export default function QueryAnalysis({
                   english: 'bg-blue-100 text-blue-700 border-blue-200',
                   number: 'bg-green-100 text-green-700 border-green-200',
                   punctuation: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-                  special: 'bg-gray-100 text-gray-700 border-gray-200'
+                  special: 'bg-gray-100 text-gray-700 border-gray-200',
+                  subword: 'bg-purple-100 text-purple-700 border-purple-200'
                 };
                 return (
                   <span
                     key={i}
                     className={`inline-block px-2 py-1 rounded text-xs border ${colors[token.type] || colors.special}`}
-                    title={`Token ID: ${token.tokenId}`}
+                    title={`Token ID: ${token.tokenId}, Type: ${token.type}`}
                   >
                     {token.token}
                     <sub className="text-xs opacity-60 ml-1">{token.tokenId}</sub>
@@ -71,6 +73,21 @@ export default function QueryAnalysis({
               )}
             </div>
           </div>
+          
+          {/* BPE 可视化 */}
+          {(analysis.tokenization?.processingSteps || 
+            analysis.tokenization?.vectorWeights || 
+            analysis.tokenization?.densityHeatmap) && (
+            <div className="mt-4 pt-4 border-t border-blue-200">
+              <BPEVisualizations
+                processingSteps={analysis.tokenization?.processingSteps}
+                vectorWeights={analysis.tokenization?.vectorWeights}
+                densityHeatmap={analysis.tokenization?.densityHeatmap}
+                statistics={analysis.tokenization?.statistics}
+                modelInfo={analysis.tokenization?.modelInfo}
+              />
+            </div>
+          )}
         </div>
       </div>
       

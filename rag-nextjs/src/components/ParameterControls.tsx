@@ -5,17 +5,27 @@ import React from 'react';
 interface ParameterControlsProps {
   topK: number;
   threshold: number;
+  tokenizerModel: string;
   onTopKChange: (value: number) => void;
   onThresholdChange: (value: number) => void;
+  onTokenizerModelChange: (value: string) => void;
   showParams: boolean;
   onToggle: () => void;
 }
 
+const SUPPORTED_MODELS = [
+  { value: 'Xenova/bert-base-multilingual-cased', label: 'BERT Multilingual (多语言)' },
+  { value: 'Xenova/bge-small-zh-v1.5', label: 'BGE Small ZH (中文优化)' },
+  { value: 'Xenova/all-MiniLM-L6-v2', label: 'MiniLM L6 v2 (轻量级)' }
+];
+
 export default function ParameterControls({
   topK,
   threshold,
+  tokenizerModel,
   onTopKChange,
   onThresholdChange,
+  onTokenizerModelChange,
   showParams,
   onToggle
 }: ParameterControlsProps) {
@@ -43,7 +53,7 @@ export default function ParameterControls({
           <i className="fas fa-chevron-up"></i> 收起
         </button>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div>
           <label className="block text-xs text-gray-600 mb-1">Top-K 文档数</label>
           <input 
@@ -75,6 +85,23 @@ export default function ParameterControls({
             <span>0.0</span>
             <span className="font-medium">{threshold.toFixed(2)}</span>
             <span>1.0</span>
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">Tokenizer 模型</label>
+          <select
+            value={tokenizerModel}
+            onChange={(e) => onTokenizerModelChange(e.target.value)}
+            className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {SUPPORTED_MODELS.map((model) => (
+              <option key={model.value} value={model.value}>
+                {model.label}
+              </option>
+            ))}
+          </select>
+          <div className="text-xs text-gray-500 mt-1">
+            当前: {SUPPORTED_MODELS.find(m => m.value === tokenizerModel)?.label || tokenizerModel}
           </div>
         </div>
       </div>

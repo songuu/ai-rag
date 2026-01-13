@@ -4,15 +4,17 @@ import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { Document } from "@langchain/core/documents";
 import { ObservabilityEngine, type Trace } from "./observability";
-import { AutoTokenizer } from "@xenova/transformers";
+import { 
+  BPETokenizer, 
+  type BPETokenizationResult, 
+  type TokenInfo,
+  type ProcessingStep,
+  type VectorWeight,
+  type DensityPoint
+} from "./bpe-tokenizer";
 
-// 接口定义
-export interface TokenInfo {
-  token: string;
-  tokenId: number;
-  position: number;
-  type: 'chinese' | 'english' | 'number' | 'punctuation' | 'special';
-}
+// 导出类型供其他模块使用
+export type { TokenInfo, ProcessingStep, VectorWeight, DensityPoint };
 
 export interface VectorFeatures {
   techScore: number;
@@ -44,9 +46,26 @@ export interface QueryVectorizationProgress {
   message: string;
   timeTaken?: number;
   tokenization?: {
+    originalText: string;
     tokenCount: number;
     tokens: TokenInfo[];
     processingTime: number;
+    // BPE 可视化数据
+    processingSteps?: ProcessingStep[];
+    vectorWeights?: VectorWeight[];
+    densityHeatmap?: DensityPoint[];
+    statistics?: {
+      totalTokens: number;
+      uniqueTokens: number;
+      subwordRatio: number;
+      averageTokenLength: number;
+      processingTime: number;
+    };
+    modelInfo?: {
+      name: string;
+      vocabSize: number;
+      mergesCount: number;
+    };
   };
   embedding?: {
     embedding: number[];
@@ -76,232 +95,77 @@ export interface RetrievalDetails {
   searchResults: SimilaritySearchResult[];
 }
 
-// 使用 @xenova/transformers 的词元化器
+// 使用 BPE 算法的词元化器（基于 @xenova/transformers，支持多模型切换）
 class SimpleTokenizer {
-  private tokenizer: any = null;
-  private loadingPromise: Promise<void> | null = null;
-  private modelName: string = 'Xenova/bert-base-multilingual-cased'; // 支持中英文的多语言模型
-  private initialized: boolean = false;
+  private bpeTokenizer: BPETokenizer;
+  private currentModel: string = 'Xenova/bert-base-multilingual-cased';
 
-  constructor() {
-    // 延迟加载，不在构造函数中初始化
-    // 注意：在 Node.js 环境中，@xenova/transformers 会自动使用 ONNX Runtime
+  constructor(private observabilityEngine?: ObservabilityEngine) {
+    this.bpeTokenizer = new BPETokenizer(this.currentModel, observabilityEngine);
   }
 
   /**
-   * 初始化 tokenizer（异步加载模型）
+   * 切换模型
    */
-  private async initialize(): Promise<void> {
-    if (this.tokenizer) {
-      return; // 已经初始化
-    }
-
-    if (this.loadingPromise) {
-      return this.loadingPromise; // 正在加载，等待完成
-    }
-
-    this.loadingPromise = (async () => {
-      try {
-        console.log(`[Tokenizer] 开始加载模型: ${this.modelName}`);
-        
-        // 使用 AutoTokenizer 自动加载模型
-        // 这个模型支持中文、英文等多种语言
-        // 在 Node.js 环境中，会自动使用 ONNX Runtime
-        this.tokenizer = await AutoTokenizer.from_pretrained(this.modelName, {
-          // 可选：设置本地缓存路径
-          // cache_dir: './models',
-          // 在服务器端运行时，可以禁用进度回调以提高性能
-          progress_callback: undefined,
-        });
-        
-        this.initialized = true;
-        console.log(`[Tokenizer] 模型加载成功: ${this.modelName}`);
-      } catch (error) {
-        console.error('[Tokenizer] 模型加载失败:', error);
-        this.initialized = false;
-        // 如果加载失败，抛出错误
-        throw new Error(`Tokenizer initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      }
-    })();
-
-    return this.loadingPromise;
+  async switchModel(modelName: string): Promise<void> {
+    await this.bpeTokenizer.switchModel(modelName);
+    this.currentModel = modelName;
   }
 
   /**
-   * 词元化文本
-   * @param text 要词元化的文本
-   * @returns TokenInfo 数组
+   * 获取当前模型
    */
-  async tokenize(text: string): Promise<TokenInfo[]> {
-    // 确保 tokenizer 已初始化
-    await this.initialize();
+  getCurrentModel(): string {
+    return this.bpeTokenizer.getCurrentModel();
+  }
 
-    if (!this.tokenizer || !this.initialized) {
-      throw new Error('Tokenizer not initialized');
-    }
+  /**
+   * 获取支持的模型列表
+   */
+  getSupportedModels(): string[] {
+    return this.bpeTokenizer.getSupportedModels();
+  }
 
+  /**
+   * 词元化文本（返回 TokenInfo 数组）
+   */
+  async tokenize(text: string, parentTraceId?: string): Promise<TokenInfo[]> {
+    const result = await this.tokenizeWithDetails(text, parentTraceId);
+    return result.tokens;
+  }
+
+  /**
+   * 获取完整的词元化结果（包含可视化数据）
+   */
+  async tokenizeWithDetails(text: string, parentTraceId?: string): Promise<BPETokenizationResult> {
     // 确保 text 是字符串类型
     if (typeof text !== 'string') {
       text = String(text || '');
     }
 
-    // 如果 text 为空，返回空数组
     if (!text.trim()) {
-      return [];
-    }
-
-    try {
-      // 使用真实的 tokenizer 进行编码，获取 token IDs
-      const encoded = this.tokenizer.encode(text, {
-        add_special_tokens: true, // 添加特殊 tokens (如 [CLS], [SEP])
-        return_tensors: false, // 返回普通数组而不是张量
-      });
-
-      // 使用 tokenizer 的 tokenize 方法获取 token 文本（更准确）
-      // 注意：某些 tokenizer 可能没有 tokenize 方法，所以我们需要从编码结果中获取
-      let tokenTexts: string[] = [];
-      
-      try {
-        // 尝试使用 tokenize 方法（如果可用）
-        if (typeof this.tokenizer.tokenize === 'function') {
-          // 确保 text 是字符串
-          const textStr = typeof text === 'string' ? text : String(text || '');
-          tokenTexts = this.tokenizer.tokenize(textStr);
-        } else {
-          // 如果没有 tokenize 方法，从词汇表中查找
-          const vocab = this.tokenizer.get_vocab();
-          if (vocab && typeof vocab === 'object') {
-            const idToToken = new Map<number, string>();
-            Object.entries(vocab).forEach(([token, id]) => {
-              if (token && typeof id === 'number') {
-                idToToken.set(id, token);
-              }
-            });
-            
-            // 为每个 token ID 查找对应的文本
-            tokenTexts = encoded.map((tokenId: number) => {
-              return idToToken.get(tokenId) || `[UNK:${tokenId}]`;
-            });
-          } else {
-            // 如果无法获取词汇表，使用解码方法
-            tokenTexts = encoded.map((tokenId: number) => {
-              try {
-                const decoded = this.tokenizer.decode([tokenId], { skip_special_tokens: false });
-                return decoded || `[TOKEN:${tokenId}]`;
-              } catch {
-                return `[TOKEN:${tokenId}]`;
-              }
-            });
-          }
+      return {
+        tokens: [],
+        originalText: text,
+        processingSteps: [],
+        vectorWeights: [],
+        densityHeatmap: [],
+        statistics: {
+          totalTokens: 0,
+          uniqueTokens: 0,
+          subwordRatio: 0,
+          averageTokenLength: 0,
+          processingTime: 0
+        },
+        modelInfo: {
+          name: this.currentModel,
+          vocabSize: 0,
+          mergesCount: 0
         }
-      } catch (error) {
-        // 如果上述方法都失败，使用词汇表作为后备
-        console.warn('Failed to get token texts, using fallback method:', error);
-        const vocab = this.tokenizer.get_vocab();
-        if (vocab && typeof vocab === 'object') {
-          const idToToken = new Map<number, string>();
-          Object.entries(vocab).forEach(([token, id]) => {
-            if (token && typeof id === 'number') {
-              idToToken.set(id, token);
-            }
-          });
-          tokenTexts = encoded.map((tokenId: number) => {
-            return idToToken.get(tokenId) || `[UNK:${tokenId}]`;
-          });
-        } else {
-          tokenTexts = encoded.map((tokenId: number) => `[TOKEN:${tokenId}]`);
-        }
-      }
-
-      // 确保 tokenTexts 数组长度与 encoded 数组长度一致
-      if (tokenTexts.length !== encoded.length) {
-        // 如果长度不匹配，使用编码结果创建默认 token 文本
-        tokenTexts = encoded.map((tokenId: number, index: number) => {
-          return tokenTexts[index] || `[TOKEN:${tokenId}]`;
-        });
-      }
-
-      // 构建 TokenInfo 数组
-      const tokens: TokenInfo[] = [];
-      let position = 0;
-
-      for (let i = 0; i < encoded.length; i++) {
-        const tokenId = encoded[i];
-        let tokenText = tokenTexts[i] || `[TOKEN:${tokenId}]`;
-
-        // 清理 token 文本（移除 BPE 标记等）
-        tokenText = this.cleanTokenText(tokenText);
-
-        // 确定 token 类型
-        const tokenType = this.getTokenType(tokenText);
-
-        tokens.push({
-          token: tokenText,
-          tokenId: tokenId,
-          position: position++,
-          type: tokenType
-        });
-      }
-
-      return tokens;
-    } catch (error) {
-      console.error('Tokenization error:', error);
-      // 如果出错，返回一个基本的 token 信息
-      return [{
-        token: text,
-        tokenId: 1, // UNK token ID
-        position: 0,
-        type: this.getTokenType(text)
-      }];
-    }
-  }
-
-  /**
-   * 清理 token 文本
-   */
-  private cleanTokenText(text: string): string {
-    // 移除 BPE 标记（如 ## 前缀）
-    return text.replace(/^##/, '').trim();
-  }
-
-  /**
-   * 确定 token 类型
-   */
-  private getTokenType(token: string): TokenInfo['type'] {
-    // 检查特殊 tokens
-    if (/^\[(CLS|SEP|PAD|UNK|MASK)\]/i.test(token)) {
-      return 'special';
+      };
     }
 
-    // 检查是否为纯英文
-    if (/^[a-zA-Z]+$/.test(token)) {
-      return 'english';
-    }
-
-    // 检查是否为中文
-    if (/^[\u4e00-\u9fff]+$/.test(token)) {
-      return 'chinese';
-    }
-
-    // 检查是否为数字
-    if (/^[0-9]+$/.test(token)) {
-      return 'number';
-    }
-
-    // 检查是否为标点符号
-    if (/^[.,!?:;()"'\-/\[\]{}]+$/.test(token)) {
-      return 'punctuation';
-    }
-
-    // 混合类型（如中英文混合、数字+字母等）
-    return 'special';
-  }
-
-  /**
-   * 获取原始文本（用于显示）
-   */
-  getOriginalText(text: string): string {
-    return text;
+    return await this.bpeTokenizer.tokenize(text, true, parentTraceId);
   }
 }
 
@@ -360,17 +224,19 @@ class SimpleMemoryVectorStore {
     query: string,
     k: number,
     threshold: number,
+    parentTraceId?: string,  // 主 Trace ID，用于关联 BPE tokenization
     onQueryProgress?: (progress: QueryVectorizationProgress) => void
   ): Promise<RetrievalDetails> {
     const startTime = Date.now();
 
-    // 1. 词元化
+    // 1. 词元化（使用 BPE tokenizer 获取完整结果）
     onQueryProgress?.({
       status: 'tokenizing',
       message: '正在进行词元化...'
     });
 
-    const tokens = await this.tokenizer.tokenize(query);
+    // 使用 tokenizeWithDetails 获取完整的 BPE 结果（包含可视化数据）
+    const tokenizationResult = await (this.tokenizer as any).tokenizeWithDetails(query, parentTraceId);
     const tokenizationTime = Date.now() - startTime;
 
     onQueryProgress?.({
@@ -378,9 +244,16 @@ class SimpleMemoryVectorStore {
       message: '词元化完成',
       timeTaken: tokenizationTime,
       tokenization: {
-        tokenCount: tokens.length,
-        tokens,
-        processingTime: tokenizationTime
+        originalText: query,
+        tokenCount: tokenizationResult.tokens.length,
+        tokens: tokenizationResult.tokens,
+        processingTime: tokenizationTime,
+        // BPE 可视化数据
+        processingSteps: tokenizationResult.processingSteps,
+        vectorWeights: tokenizationResult.vectorWeights,
+        densityHeatmap: tokenizationResult.densityHeatmap,
+        statistics: tokenizationResult.statistics,
+        modelInfo: tokenizationResult.modelInfo
       }
     });
 
@@ -629,18 +502,33 @@ export class LocalRAGSystem {
       similarityThreshold?: number;
       userId?: string;
       sessionId?: string;
+      tokenizerModel?: string;  // 允许指定 tokenizer 模型
     } = {}
   ): Promise<{
     answer: string;
     retrievalDetails: RetrievalDetails;
     context: string;
     traceId: string;
+    queryAnalysis?: {
+      tokenization?: any;
+      embedding?: any;
+    };
   }> {
     if (!this.isInitialized) {
       throw new Error("RAG 系统尚未初始化，请先调用 initializeDatabase()");
     }
 
-    const { topK = 3, similarityThreshold = 0.0, userId, sessionId } = options;
+    const { topK = 3, similarityThreshold = 0.0, userId, sessionId, tokenizerModel } = options;
+    
+    // 如果指定了 tokenizer 模型，切换模型
+    if (tokenizerModel) {
+      try {
+        await (this.vectorStore as any).tokenizer.switchModel(tokenizerModel);
+        console.log(`[RAG System] 已切换 tokenizer 模型到: ${tokenizerModel}`);
+      } catch (error) {
+        console.error(`[RAG System] 切换 tokenizer 模型失败:`, error);
+      }
+    }
 
     // 创建 Trace
     const traceId = this.observabilityEngine.createTrace({
@@ -674,12 +562,30 @@ export class LocalRAGSystem {
         metadata: { stage: 'retrieval' }
       });
 
-      // 执行检索
+      // 收集 tokenization 和 embedding 数据
+      let tokenizationData: any = null;
+      let embeddingData: any = null;
+      
+      // 创建包装的进度回调
+      const wrappedProgressCallback = (progress: QueryVectorizationProgress) => {
+        // 调用原始回调
+        this.config.onQueryVectorizationProgress?.(progress);
+        // 同时保存数据
+        if (progress.tokenization) {
+          tokenizationData = progress.tokenization;
+        }
+        if (progress.embedding) {
+          embeddingData = progress.embedding;
+        }
+      };
+      
+      // 执行检索（带进度回调和主 Trace ID）
       const retrievalDetails = await this.vectorStore.similaritySearchWithDetails(
         question,
         topK,
         similarityThreshold,
-        this.config.onQueryVectorizationProgress
+        traceId,  // 传入主 Trace ID，让 BPE tokenizer 创建 Span 而不是独立的 Trace
+        wrappedProgressCallback
       );
 
       // 更新检索 Span
@@ -754,7 +660,11 @@ export class LocalRAGSystem {
         answer: result,
         retrievalDetails,
         context,
-        traceId
+        traceId,
+        queryAnalysis: {
+          tokenization: tokenizationData,
+          embedding: embeddingData
+        }
       };
 
     } catch (error) {
