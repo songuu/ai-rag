@@ -666,6 +666,13 @@ export default function HomePage() {
                   <i className="fas fa-sitemap mr-2"></i>
                   Trace-Trie 分析
                 </Link>
+                <Link 
+                  href="/domain-vectors" 
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-emerald-600 bg-emerald-100 hover:bg-emerald-200 transition-colors"
+                >
+                  <i className="fas fa-crosshairs mr-2"></i>
+                  领域向量
+                </Link>
                 <button
                   onClick={handleDeleteAllConversations}
                   className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-red-600 bg-red-100 hover:bg-red-200 transition-colors"
