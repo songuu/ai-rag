@@ -11,6 +11,7 @@ import ParameterControls from '@/components/ParameterControls';
 import FileUpload from '@/components/FileUpload';
 import FileList from '@/components/FileList';
 import RealtimeMonitoring from '@/components/RealtimeMonitoring';
+import RetrievalDetailsPanel from '@/components/RetrievalDetailsPanel';
 import SystemInfo from '@/components/SystemInfo';
 import Toast from '@/components/Toast';
 
@@ -42,6 +43,8 @@ export default function HomePage() {
   const [isLoading, setIsLoading] = useState(false);
   const [topK, setTopK] = useState(3);
   const [threshold, setThreshold] = useState(0.0);
+  const [llmModel, setLlmModel] = useState('llama3.1');
+  const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
   const [queryAnalysis, setQueryAnalysis] = useState<any>(null);
   const [showParams, setShowParams] = useState(true);
   const [showQueryAnalysis, setShowQueryAnalysis] = useState(false);
@@ -452,6 +455,8 @@ export default function HomePage() {
           question: input.trim(),
           topK,
           similarityThreshold: threshold,
+          llmModel,
+          embeddingModel,
           userId: 'demo-user',
           sessionId: 'demo-session'
         }),
@@ -741,8 +746,12 @@ export default function HomePage() {
                 <ParameterControls
                   topK={topK}
                   threshold={threshold}
+                  llmModel={llmModel}
+                  embeddingModel={embeddingModel}
                   onTopKChange={setTopK}
                   onThresholdChange={setThreshold}
+                  onLLMModelChange={setLlmModel}
+                  onEmbeddingModelChange={setEmbeddingModel}
                   showParams={showParams}
                   onToggle={() => setShowParams(!showParams)}
                 />
@@ -846,6 +855,12 @@ export default function HomePage() {
               isLoading={isLoading}
               queryAnalysis={queryAnalysis}
               retrievalDetails={retrievalDetails}
+            />
+            
+            {/* 检索详情面板 */}
+            <RetrievalDetailsPanel
+              retrievalDetails={retrievalDetails}
+              queryText={currentQuery}
             />
             
             <SystemInfo

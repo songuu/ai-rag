@@ -16,12 +16,16 @@ export async function POST() {
       const files = await readdir(UPLOAD_DIR);
       const txtFiles = files.filter(f => f.endsWith('.txt'));
       
-      const documents: string[] = [];
+      const documents: Array<{ content: string; filename: string }> = [];
       for (const filename of txtFiles) {
         const filePath = path.join(UPLOAD_DIR, filename);
         const content = await readFile(filePath, 'utf-8');
-        documents.push(content);
+        if (content.trim()) {
+          documents.push({ content, filename });
+        }
       }
+      
+      console.log(`[Reinitialize] 找到 ${documents.length} 个有效文档`);
       
       // 重新初始化系统
       await ragSystem.reinitialize(documents);

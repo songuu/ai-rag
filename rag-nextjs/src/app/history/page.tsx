@@ -207,7 +207,7 @@ export default function HistoryPage() {
                                 <p>相似度阈值: {message.retrievalDetails.threshold}</p>
                               </div>
                               {message.retrievalDetails.searchResults?.map((result: any, index: number) => (
-                                <div key={index} className="bg-gray-800 rounded p-2 mt-2">
+                                <div key={index} className="bg-gray-200 rounded p-2 mt-2">
                                   <div className="flex justify-between items-center mb-1">
                                     <span className="font-medium">文档 {index + 1}</span>
                                     <span className="text-blue-400">

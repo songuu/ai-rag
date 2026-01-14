@@ -5,6 +5,9 @@ import { StringOutputParser } from "@langchain/core/output_parsers";
 import { Document } from "@langchain/core/documents";
 import { ObservabilityEngine, type Trace } from "./observability";
 import { AutoTokenizer } from "@xenova/transformers";
+import { readdir, readFile } from "fs/promises";
+import { existsSync } from "fs";
+import path from "path";
 
 // 接口定义
 export interface TokenInfo {
@@ -584,29 +587,64 @@ export class LocalRAGSystem {
     console.log("正在初始化 RAG 系统...");
     console.log("--- 正在初始化向量数据库 ---");
 
-    // 创建示例文档
-    const documents = [
-      new Document({
-        pageContent: "人工智能（AI）是计算机科学的一个分支，致力于创建能够执行通常需要人类智能的任务的系统。这包括学习、推理、问题解决、感知和语言理解。",
-        metadata: { source: "ai-intro.txt" }
-      }),
-      new Document({
-        pageContent: "机器学习是人工智能的一个子集，它使计算机能够在没有明确编程的情况下学习和改进。它基于算法，这些算法可以从数据中学习并做出预测或决策。",
-        metadata: { source: "ml-intro.txt" }
-      }),
-      new Document({
-        pageContent: "深度学习是机器学习的一个子领域，它使用具有多层的神经网络来模拟人脑的工作方式。这种方法在图像识别、自然语言处理和语音识别等领域取得了显著成功。",
-        metadata: { source: "dl-intro.txt" }
-      }),
-      new Document({
-        pageContent: "智能手机是一种功能强大的移动设备，集成了计算、通信和娱乐功能。现代智能手机配备了先进的处理器、高分辨率显示屏和多种传感器。",
-        metadata: { source: "smartphone-intro.txt" }
-      }),
-      new Document({
-        pageContent: "苹果公司是一家美国跨国科技公司，以设计、开发和销售消费电子产品、计算机软件和在线服务而闻名。其产品包括iPhone、iPad、Mac电脑等。",
-        metadata: { source: "apple-intro.txt" }
-      })
-    ];
+    // 尝试从 uploads 文件夹读取文档
+    const uploadsDir = docsPath || path.join(process.cwd(), "uploads");
+    let documents: Document[] = [];
+
+    try {
+      if (existsSync(uploadsDir)) {
+        const files = await readdir(uploadsDir);
+        const txtFiles = files.filter(file => file.endsWith('.txt'));
+        
+        if (txtFiles.length > 0) {
+          console.log(`发现 ${txtFiles.length} 个上传的文档文件`);
+          
+          for (const filename of txtFiles) {
+            const filePath = path.join(uploadsDir, filename);
+            const content = await readFile(filePath, 'utf-8');
+            
+            if (content.trim()) {
+              documents.push(new Document({
+                pageContent: content,
+                metadata: { source: filename }
+              }));
+              console.log(`已加载: ${filename}`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error("读取上传文档时出错:", error);
+    }
+
+    // 如果没有上传的文档，使用示例文档作为回退
+    if (documents.length === 0) {
+      console.log("没有找到上传的文档，使用示例文档...");
+      documents = [
+        new Document({
+          pageContent: "人工智能（AI）是计算机科学的一个分支，致力于创建能够执行通常需要人类智能的任务的系统。这包括学习、推理、问题解决、感知和语言理解。",
+          metadata: { source: "ai-intro.txt" }
+        }),
+        new Document({
+          pageContent: "机器学习是人工智能的一个子集，它使计算机能够在没有明确编程的情况下学习和改进。它基于算法，这些算法可以从数据中学习并做出预测或决策。",
+          metadata: { source: "ml-intro.txt" }
+        }),
+        new Document({
+          pageContent: "深度学习是机器学习的一个子领域，它使用具有多层的神经网络来模拟人脑的工作方式。这种方法在图像识别、自然语言处理和语音识别等领域取得了显著成功。",
+          metadata: { source: "dl-intro.txt" }
+        }),
+        new Document({
+          pageContent: "智能手机是一种功能强大的移动设备，集成了计算、通信和娱乐功能。现代智能手机配备了先进的处理器、高分辨率显示屏和多种传感器。",
+          metadata: { source: "smartphone-intro.txt" }
+        }),
+        new Document({
+          pageContent: "苹果公司是一家美国跨国科技公司，以设计、开发和销售消费电子产品、计算机软件和在线服务而闻名。其产品包括iPhone、iPad、Mac电脑等。",
+          metadata: { source: "apple-intro.txt" }
+        })
+      ];
+    } else {
+      console.log(`成功加载 ${documents.length} 个上传的文档`);
+    }
 
     // 文本分割
     const textSplitter = new RecursiveCharacterTextSplitter({
@@ -625,19 +663,26 @@ export class LocalRAGSystem {
     console.log("RAG 系统初始化完成！");
   }
 
-  async reinitialize(documents: string[]): Promise<void> {
+  async reinitialize(documents: Array<{ content: string; filename: string }> | string[]): Promise<void> {
     console.log("正在重新初始化 RAG 系统...");
     
     // 清空现有数据
     this.vectorStore.clear();
     
-    // 将字符串数组转换为 Document 对象
-    const docs = documents.map((content, index) => 
-      new Document({
-        pageContent: content,
-        metadata: { source: `document-${index}.txt` }
-      })
-    );
+    // 将输入转换为 Document 对象
+    const docs = documents.map((doc, index) => {
+      // 兼容旧的字符串数组格式和新的对象格式
+      if (typeof doc === 'string') {
+        return new Document({
+          pageContent: doc,
+          metadata: { source: `document-${index}.txt` }
+        });
+      }
+      return new Document({
+        pageContent: doc.content,
+        metadata: { source: doc.filename }
+      });
+    });
     
     if (docs.length === 0) {
       this.isInitialized = false;
@@ -667,6 +712,8 @@ export class LocalRAGSystem {
     options: {
       topK?: number;
       similarityThreshold?: number;
+      llmModel?: string;
+      embeddingModel?: string;
       userId?: string;
       sessionId?: string;
     } = {}

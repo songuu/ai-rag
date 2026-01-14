@@ -125,47 +125,81 @@ export default function RealtimeMonitoring({
           )}
         </div>
         
-        {/* 检索详情 */}
+        {/* 检索过程概览 */}
         <div className="mb-4 p-3 bg-purple-50 rounded-lg border border-purple-200">
           <h4 className="text-sm font-medium text-purple-800 mb-2">
             <i className="fas fa-list-alt mr-2"></i>
             检索过程
           </h4>
           {retrievalDetails ? (
-            <div className="bg-white rounded p-3 space-y-2 text-xs">
-              <div className="flex justify-between">
-                <span className="text-gray-600">检索耗时:</span>
-                <span className="font-medium">{retrievalDetails.searchTime || 0}ms</span>
+            <div className="bg-white rounded p-3 text-xs">
+              {/* 状态指示器 */}
+              <div className="flex items-center gap-2 mb-3">
+                <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                <span className="text-green-700 font-medium">检索完成</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">总文档数:</span>
-                <span className="font-medium">{retrievalDetails.totalDocuments || 0}</span>
+              
+              {/* 快速统计 */}
+              <div className="grid grid-cols-2 gap-2 mb-3">
+                <div className="bg-purple-50 rounded p-2 text-center">
+                  <div className="text-lg font-bold text-purple-600">
+                    {retrievalDetails.searchResults?.length || 0}
+                  </div>
+                  <div className="text-[10px] text-gray-500">匹配文档</div>
+                </div>
+                <div className="bg-blue-50 rounded p-2 text-center">
+                  <div className="text-lg font-bold text-blue-600">
+                    {retrievalDetails.searchTime || 0}ms
+                  </div>
+                  <div className="text-[10px] text-gray-500">检索耗时</div>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">匹配文档数:</span>
-                <span className="font-medium">{retrievalDetails.searchResults?.length || retrievalDetails.matchedDocuments || 0}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">相似度阈值:</span>
-                <span className="font-medium">{retrievalDetails.threshold || 0}</span>
-              </div>
+              
+              {/* Top 3 相似度预览 */}
               {retrievalDetails.searchResults && retrievalDetails.searchResults.length > 0 && (
-                <div className="mt-2 pt-2 border-t">
-                  <div className="text-gray-600 mb-1">Top 结果:</div>
-                  {retrievalDetails.searchResults.slice(0, 3).map((result: any, index: number) => (
-                    <div key={index} className="flex justify-between text-xs mb-1">
-                      <span>文档 {index + 1}:</span>
-                      <span className="font-medium text-purple-600">
-                        {((result.similarity || 0) * 100).toFixed(2)}%
-                      </span>
-                    </div>
-                  ))}
+                <div className="space-y-1.5">
+                  <div className="text-[10px] text-gray-500 uppercase tracking-wider">相似度排名</div>
+                  {retrievalDetails.searchResults.slice(0, 3).map((result: any, index: number) => {
+                    const similarity = (result.similarity || 0) * 100;
+                    const barColor = similarity >= 80 ? 'bg-green-500' : 
+                                     similarity >= 60 ? 'bg-blue-500' : 
+                                     similarity >= 40 ? 'bg-yellow-500' : 'bg-red-500';
+                    return (
+                      <div key={index} className="flex items-center gap-2">
+                        <span className={`w-5 h-5 rounded-full text-xs font-bold flex items-center justify-center ${
+                          index === 0 ? 'bg-yellow-100 text-yellow-700' :
+                          index === 1 ? 'bg-gray-100 text-gray-600' :
+                          'bg-orange-100 text-orange-600'
+                        }`}>
+                          {index + 1}
+                        </span>
+                        <div className="flex-1 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full ${barColor} transition-all duration-500`}
+                            style={{ width: `${similarity}%` }}
+                          />
+                        </div>
+                        <span className="w-12 text-right font-mono text-purple-600">
+                          {similarity.toFixed(1)}%
+                        </span>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
+              
+              {/* 查看详情提示 */}
+              <div className="mt-3 pt-2 border-t border-purple-100 text-center">
+                <span className="text-[10px] text-purple-600">
+                  ↓ 下方面板查看详细匹配信息
+                </span>
+              </div>
             </div>
           ) : (
-            <div className="text-xs text-gray-500 text-center py-2">
-              <i className="fas fa-info-circle mr-1"></i>
+            <div className="text-xs text-gray-500 text-center py-4">
+              <div className="w-8 h-8 mx-auto mb-2 rounded-full bg-gray-100 flex items-center justify-center">
+                <i className="fas fa-search text-gray-400"></i>
+              </div>
               等待检索结果...
             </div>
           )}

@@ -47,7 +47,7 @@ export default function TraceTriePage() {
     { name: 'Xenova/xlm-roberta-base', label: 'XLM-RoBERTa', category: '多语言', description: '跨语言预训练模型' },
     // 中文模型
     { name: 'Xenova/bge-small-zh-v1.5', label: 'BGE Small ZH', category: '中文', description: '中文嵌入模型' },
-    { name: 'Xenova/text2vec-base-chinese', label: 'Text2Vec Chinese', category: '中文', description: '中文文本向量化' },
+    { name: 'Xenova/text2vec-base-chinese-sentence', label: 'Text2Vec Chinese', category: '中文', description: '中文文本向量化' },
     // 英文模型
     { name: 'Xenova/all-MiniLM-L6-v2', label: 'All-MiniLM', category: '英文', description: '轻量级英文模型' },
     { name: 'Xenova/bert-base-uncased', label: 'BERT Base', category: '英文', description: '英文BERT基础模型' },
