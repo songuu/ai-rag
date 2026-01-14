@@ -14,6 +14,7 @@ import RealtimeMonitoring from '@/components/RealtimeMonitoring';
 import RetrievalDetailsPanel from '@/components/RetrievalDetailsPanel';
 import SystemInfo from '@/components/SystemInfo';
 import Toast from '@/components/Toast';
+import IntentDistillationPanel from '@/components/IntentDistillationPanel';
 
 interface Message {
   id: string;
@@ -66,6 +67,7 @@ export default function HomePage() {
   const [viewingAnalysisFor, setViewingAnalysisFor] = useState<string | null>(null);
   const [retrievalDetails, setRetrievalDetails] = useState<any>(null);
   const [vectorizationDetails, setVectorizationDetails] = useState<any>(null);
+  const [showIntentDistillation, setShowIntentDistillation] = useState(false);
   
   const socketRef = useRef<Socket | null>(null);
 
@@ -764,26 +766,66 @@ export default function HomePage() {
                 />
                 
                 <form onSubmit={handleSubmit} className="space-y-4">
-                  <div className="flex space-x-4">
-                    <div className="flex-1">
-                      <input 
-                        type="text" 
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        placeholder="请输入您的问题..."
-                        className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        disabled={isLoading}
-                        required
-                      />
+                  <div className="space-y-3">
+                    <div className="flex space-x-4">
+                      <div className="flex-1">
+                        <input 
+                          type="text" 
+                          value={input}
+                          onChange={(e) => setInput(e.target.value)}
+                          placeholder="请输入您的问题..."
+                          className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          disabled={isLoading}
+                          required
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowIntentDistillation(!showIntentDistillation)}
+                        className={`px-4 py-2 rounded-lg transition-colors ${
+                          showIntentDistillation 
+                            ? 'bg-purple-600 text-white' 
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                        title="意图蒸馏"
+                      >
+                        <i className="fas fa-brain mr-2"></i>
+                        🧠
+                      </button>
+                      <button 
+                        type="submit"
+                        disabled={isLoading || !input.trim()}
+                        className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <i className="fas fa-paper-plane mr-2"></i>
+                        发送
+                      </button>
                     </div>
-                    <button 
-                      type="submit"
-                      disabled={isLoading || !input.trim()}
-                      className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <i className="fas fa-paper-plane mr-2"></i>
-                      发送
-                    </button>
+                    
+                    {/* 意图蒸馏面板 */}
+                    {showIntentDistillation && input.trim() && (
+                      <div className="bg-gradient-to-br from-purple-50 to-blue-50 border-2 border-purple-200 rounded-xl p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <h3 className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                            <span className="text-xl">🧠</span>
+                            意图蒸馏分析
+                          </h3>
+                          <button
+                            onClick={() => setShowIntentDistillation(false)}
+                            className="text-gray-400 hover:text-gray-600"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                        <IntentDistillationPanel 
+                          query={input} 
+                          onQuerySelect={(query) => {
+                            setInput(query);
+                            setShowIntentDistillation(false);
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                   
                   {/* 用户问题处理结果展示 */}
