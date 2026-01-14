@@ -128,11 +128,67 @@ class SimpleTokenizer {
   }
 
   /**
+   * 从 tokenizer 中提取词汇表 (id -> token 映射)
+   */
+  private extractIdToTokenMap(): Map<number, string> {
+    const idToToken = new Map<number, string>();
+    
+    const extractFromVocabObject = (vocabObj: any) => {
+      if (!vocabObj) return;
+      
+      if (vocabObj instanceof Map) {
+        vocabObj.forEach((value: any, key: any) => {
+          if (typeof key === 'string' && typeof value === 'number') {
+            idToToken.set(value, key);
+          } else if (typeof value === 'string' && typeof key === 'number') {
+            idToToken.set(key, value);
+          }
+        });
+      } else if (Array.isArray(vocabObj)) {
+        vocabObj.forEach((token, index) => {
+          if (typeof token === 'string') {
+            idToToken.set(index, token);
+          }
+        });
+      } else if (typeof vocabObj === 'object') {
+        Object.entries(vocabObj).forEach(([key, value]) => {
+          if (typeof value === 'number') {
+            idToToken.set(value, key);
+          }
+        });
+      }
+    };
+
+    const vocabPaths = [
+      () => this.tokenizer?.model?.vocab,
+      () => this.tokenizer?.model?.encoder,
+      () => this.tokenizer?.vocab,
+      () => this.tokenizer?.encoder,
+      () => this.tokenizer?.tokenizer_?.model?.vocab,
+      () => this.tokenizer?._tokenizer?.model?.vocab
+    ];
+
+    for (const getVocab of vocabPaths) {
+      try {
+        const vocabObj = getVocab();
+        if (vocabObj) {
+          extractFromVocabObject(vocabObj);
+          if (idToToken.size > 0) break;
+        }
+      } catch {
+        // 忽略访问错误
+      }
+    }
+    
+    return idToToken;
+  }
+
+  /**
    * 词元化文本
    * @param text 要词元化的文本
    * @returns TokenInfo 数组
    */
-  async tokenize(text: string): Promise<TokenInfo[]> {
+  async tokenize(text: string | any): Promise<TokenInfo[]> {
     // 确保 tokenizer 已初始化
     await this.initialize();
 
@@ -140,76 +196,60 @@ class SimpleTokenizer {
       throw new Error('Tokenizer not initialized');
     }
 
-    // 确保 text 是字符串类型
-    if (typeof text !== 'string') {
-      text = String(text || '');
+    // 强制转换为字符串类型
+    let textStr: string;
+    if (typeof text === 'string') {
+      textStr = text;
+    } else if (text === null || text === undefined) {
+      textStr = '';
+    } else if (typeof text === 'object') {
+      // 如果是对象，尝试获取其 text/content/query 属性
+      textStr = String(text.text || text.content || text.query || text.toString() || '');
+    } else {
+      textStr = String(text);
     }
 
     // 如果 text 为空，返回空数组
-    if (!text.trim()) {
+    if (!textStr.trim()) {
       return [];
     }
 
     try {
       // 使用真实的 tokenizer 进行编码，获取 token IDs
-      const encoded = this.tokenizer.encode(text, {
-        add_special_tokens: true, // 添加特殊 tokens (如 [CLS], [SEP])
-        return_tensors: false, // 返回普通数组而不是张量
+      const encoded = this.tokenizer.encode(textStr, {
+        add_special_tokens: true,
+        return_tensors: false,
       });
 
-      // 使用 tokenizer 的 tokenize 方法获取 token 文本（更准确）
-      // 注意：某些 tokenizer 可能没有 tokenize 方法，所以我们需要从编码结果中获取
+      // 获取 token 文本
       let tokenTexts: string[] = [];
       
       try {
-        // 尝试使用 tokenize 方法（如果可用）
-        if (typeof this.tokenizer.tokenize === 'function') {
-          // 确保 text 是字符串
-          const textStr = typeof text === 'string' ? text : String(text || '');
-          tokenTexts = this.tokenizer.tokenize(textStr);
-        } else {
-          // 如果没有 tokenize 方法，从词汇表中查找
-          const vocab = this.tokenizer.get_vocab();
-          if (vocab && typeof vocab === 'object') {
-            const idToToken = new Map<number, string>();
-            Object.entries(vocab).forEach(([token, id]) => {
-              if (token && typeof id === 'number') {
-                idToToken.set(id, token);
-              }
-            });
-            
-            // 为每个 token ID 查找对应的文本
+        // 方法1: 尝试使用 batch_decode
+        tokenTexts = this.tokenizer.batch_decode(
+          encoded.map((id: number) => [id]),
+          { skip_special_tokens: false }
+        );
+      } catch {
+        try {
+          // 方法2: 使用单个 decode
+          tokenTexts = encoded.map((tokenId: number) => {
+            try {
+              return this.tokenizer.decode([tokenId], { skip_special_tokens: false }) || `[TOKEN:${tokenId}]`;
+            } catch {
+              return `[TOKEN:${tokenId}]`;
+            }
+          });
+        } catch {
+          // 方法3: 从词汇表中获取
+          const idToToken = this.extractIdToTokenMap();
+          if (idToToken.size > 0) {
             tokenTexts = encoded.map((tokenId: number) => {
               return idToToken.get(tokenId) || `[UNK:${tokenId}]`;
             });
           } else {
-            // 如果无法获取词汇表，使用解码方法
-            tokenTexts = encoded.map((tokenId: number) => {
-              try {
-                const decoded = this.tokenizer.decode([tokenId], { skip_special_tokens: false });
-                return decoded || `[TOKEN:${tokenId}]`;
-              } catch {
-                return `[TOKEN:${tokenId}]`;
-              }
-            });
+            tokenTexts = encoded.map((tokenId: number) => `[TOKEN:${tokenId}]`);
           }
-        }
-      } catch (error) {
-        // 如果上述方法都失败，使用词汇表作为后备
-        console.warn('Failed to get token texts, using fallback method:', error);
-        const vocab = this.tokenizer.get_vocab();
-        if (vocab && typeof vocab === 'object') {
-          const idToToken = new Map<number, string>();
-          Object.entries(vocab).forEach(([token, id]) => {
-            if (token && typeof id === 'number') {
-              idToToken.set(id, token);
-            }
-          });
-          tokenTexts = encoded.map((tokenId: number) => {
-            return idToToken.get(tokenId) || `[UNK:${tokenId}]`;
-          });
-        } else {
-          tokenTexts = encoded.map((tokenId: number) => `[TOKEN:${tokenId}]`);
         }
       }
 

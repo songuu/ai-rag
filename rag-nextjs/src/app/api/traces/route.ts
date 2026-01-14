@@ -1,11 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
-import { getRagSystem } from '@/lib/rag-instance';
+import { NextResponse } from 'next/server';
+import { getRagSystem, getCurrentRagSystem } from '@/lib/rag-instance';
 
 // GET /api/traces - 获取所有 Traces
 export async function GET() {
   try {
-    const ragSystem = await getRagSystem();
+    // 首先尝试获取当前已存在的实例（不创建新实例）
+    let ragSystem = getCurrentRagSystem();
+    
+    // 如果没有实例，获取或创建一个
+    if (!ragSystem) {
+      console.log('[API/traces] No existing RAG instance, creating one...');
+      ragSystem = await getRagSystem();
+    }
+    
     const observabilityData = ragSystem.getObservabilityData();
+    
+    console.log(`[API/traces] Returning ${observabilityData.traces.length} traces`);
     
     return NextResponse.json({
       success: true,
@@ -13,11 +23,20 @@ export async function GET() {
       stats: observabilityData.stats
     });
   } catch (error) {
-    console.error("获取 Traces 错误:", error);
+    console.error("[API/traces] 获取 Traces 错误:", error);
     return NextResponse.json(
       { 
+        success: false,
         error: "获取 Traces 失败",
-        details: error instanceof Error ? error.message : String(error)
+        details: error instanceof Error ? error.message : String(error),
+        traces: [],
+        stats: {
+          totalTraces: 0,
+          successRate: 0,
+          avgDuration: 0,
+          totalTokens: 0,
+          avgTokensPerTrace: 0
+        }
       },
       { status: 500 }
     );

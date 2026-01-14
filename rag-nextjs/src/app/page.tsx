@@ -459,6 +459,8 @@ export default function HomePage() {
 
       const data = await response.json();
 
+      console.log('data', data);
+
       if (data.success) {
         let queryAnalysisData: any;
         if (data.queryAnalysis) {
@@ -651,6 +653,13 @@ export default function HomePage() {
                 >
                   <i className="fas fa-history mr-2"></i>
                   历史对话
+                </Link>
+                <Link 
+                  href="/trace-trie" 
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-purple-600 bg-purple-100 hover:bg-purple-200 transition-colors"
+                >
+                  <i className="fas fa-sitemap mr-2"></i>
+                  Trace-Trie 分析
                 </Link>
                 <button
                   onClick={handleDeleteAllConversations}
