@@ -229,6 +229,50 @@ export default function HomePage() {
     }
   };
 
+  // 处理模型切换
+  const handleModelChange = async (newLlmModel: string, newEmbeddingModel: string) => {
+    const hasChanged = newLlmModel !== llmModel || newEmbeddingModel !== embeddingModel;
+    
+    if (!hasChanged) {
+      showToast('模型未做任何更改', 'info');
+      return;
+    }
+
+    try {
+      showToast('正在切换模型...', 'info');
+      setSystemStatus('重新初始化中...');
+      
+      // 更新模型状态
+      setLlmModel(newLlmModel);
+      setEmbeddingModel(newEmbeddingModel);
+      
+      // 调用重新初始化 API（使用新模型）
+      const response = await fetch('/api/reinitialize', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          llmModel: newLlmModel,
+          embeddingModel: newEmbeddingModel
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        showToast(`模型切换成功: ${newLlmModel.split(':')[0]}`, 'success');
+        checkSystemHealth();
+        loadFilesList();
+      } else {
+        showToast(data.error || '模型切换失败', 'error');
+        setSystemStatus('错误');
+      }
+    } catch (error) {
+      console.error('模型切换错误:', error);
+      showToast('模型切换时发生错误', 'error');
+      setSystemStatus('错误');
+    }
+  };
+
   // Toast 通知
   const showToast = (message: string, type: Toast['type'] = 'info') => {
     const id = Date.now().toString();
@@ -916,7 +960,10 @@ export default function HomePage() {
               docCount={docCount}
               embeddingDim={embeddingDim}
               systemStatus={systemStatus}
+              llmModel={llmModel}
+              embeddingModel={embeddingModel}
               onReinitialize={handleReinitialize}
+              onModelChange={handleModelChange}
             />
           </div>
         </div>

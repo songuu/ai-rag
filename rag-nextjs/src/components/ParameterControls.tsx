@@ -1,32 +1,7 @@
 'use client';
 
-import React, { useState } from 'react';
-
-// 可用的 LLM 模型列表
-export const LLM_MODELS = [
-  { id: 'llama3.1', name: 'Llama 3.1', description: '高性能通用模型', provider: 'Meta' },
-  { id: 'llama3.1:70b', name: 'Llama 3.1 70B', description: '大参数量版本', provider: 'Meta' },
-  { id: 'llama3.2', name: 'Llama 3.2', description: '最新版本', provider: 'Meta' },
-  { id: 'qwen2.5', name: 'Qwen 2.5', description: '阿里云通义千问', provider: 'Alibaba' },
-  { id: 'qwen2.5:14b', name: 'Qwen 2.5 14B', description: '中等规模版本', provider: 'Alibaba' },
-  { id: 'deepseek-r1:14b', name: 'DeepSeek R1 14B', description: '推理增强模型', provider: 'DeepSeek' },
-  { id: 'deepseek-r1:32b', name: 'DeepSeek R1 32B', description: '大规模推理模型', provider: 'DeepSeek' },
-  { id: 'mistral', name: 'Mistral', description: '高效欧洲模型', provider: 'Mistral AI' },
-  { id: 'mixtral', name: 'Mixtral MoE', description: '混合专家模型', provider: 'Mistral AI' },
-  { id: 'gemma2', name: 'Gemma 2', description: 'Google 开源模型', provider: 'Google' },
-  { id: 'phi3', name: 'Phi-3', description: '小型高效模型', provider: 'Microsoft' },
-];
-
-// 可用的 Embedding 模型列表
-export const EMBEDDING_MODELS = [
-  { id: 'nomic-embed-text', name: 'Nomic Embed', description: '通用文本嵌入', dim: 768 },
-  { id: 'mxbai-embed-large', name: 'MxBAI Large', description: '大规模嵌入模型', dim: 1024 },
-  { id: 'bge-m3', name: 'BGE-M3', description: '多语言嵌入', dim: 1024 },
-  { id: 'bge-large', name: 'BGE Large', description: '智源大规模嵌入', dim: 1024 },
-  { id: 'snowflake-arctic-embed', name: 'Snowflake Arctic', description: '企业级嵌入', dim: 1024 },
-  { id: 'all-minilm', name: 'All-MiniLM', description: '轻量级嵌入', dim: 384 },
-];
-
+import React, { useState, useEffect } from 'react';
+import ModelManagementPanel from './ModelManagementPanel';
 interface ParameterControlsProps {
   topK: number;
   threshold: number;
@@ -52,7 +27,29 @@ export default function ParameterControls({
   showParams,
   onToggle
 }: ParameterControlsProps) {
-  const [activeTab, setActiveTab] = useState<'retrieval' | 'model'>('retrieval');
+  const [activeTab, setActiveTab] = useState<'retrieval' | 'model' | 'manage'>('retrieval');
+  const [availableModels, setAvailableModels] = useState<any>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
+
+  // 加载可用模型
+  useEffect(() => {
+    if (activeTab === 'model' || activeTab === 'manage') {
+      loadAvailableModels();
+    }
+  }, [activeTab]);
+
+  const loadAvailableModels = async () => {
+    setLoadingModels(true);
+    try {
+      const response = await fetch('/api/ollama/models');
+      const data = await response.json();
+      setAvailableModels(data);
+    } catch (error) {
+      console.error('Failed to load models:', error);
+    } finally {
+      setLoadingModels(false);
+    }
+  };
 
   if (!showParams) {
     return (
@@ -66,9 +63,6 @@ export default function ParameterControls({
       </div>
     );
   }
-
-  const selectedLLM = LLM_MODELS.find(m => m.id === llmModel);
-  const selectedEmbed = EMBEDDING_MODELS.find(m => m.id === embeddingModel);
 
   return (
     <div className="mb-4 p-4 bg-gray-50 rounded-lg">
@@ -84,7 +78,7 @@ export default function ParameterControls({
           >
             检索参数
           </button>
-          <button
+          {/* <button
             onClick={() => setActiveTab('model')}
             className={`px-3 py-1 text-xs rounded-md transition-colors ${
               activeTab === 'model' 
@@ -94,6 +88,16 @@ export default function ParameterControls({
           >
             模型选择
           </button>
+          <button
+            onClick={() => setActiveTab('manage')}
+            className={`px-3 py-1 text-xs rounded-md transition-colors ${
+              activeTab === 'manage' 
+                ? 'bg-purple-600 text-white' 
+                : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+            }`}
+          >
+            🔧 模型管理
+          </button> */}
         </div>
         <button 
           onClick={onToggle}
@@ -143,85 +147,204 @@ export default function ParameterControls({
 
       {activeTab === 'model' && (
         <div className="space-y-4">
-          {/* LLM 模型选择 */}
-          <div>
-            <label className="block text-xs text-gray-600 mb-2">
-              <span className="font-medium">LLM 模型</span>
-              {selectedLLM && (
-                <span className="ml-2 text-gray-400">
-                  ({selectedLLM.provider})
-                </span>
-              )}
-            </label>
-            <div className="grid grid-cols-3 gap-2 max-h-32 overflow-y-auto">
-              {LLM_MODELS.map((model) => (
-                <button
-                  key={model.id}
-                  onClick={() => onLLMModelChange(model.id)}
-                  className={`p-2 text-left rounded-md border transition-all ${
-                    llmModel === model.id
-                      ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
-                      : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="text-xs font-medium text-gray-800 truncate">
-                    {model.name}
-                  </div>
-                  <div className="text-[10px] text-gray-500 truncate">
-                    {model.description}
-                  </div>
-                </button>
-              ))}
+          {loadingModels ? (
+            <div className="text-center py-8">
+              <div className="animate-spin h-8 w-8 border-4 border-purple-600 border-t-transparent rounded-full mx-auto mb-2"></div>
+              <p className="text-xs text-gray-500">正在检测本地 Ollama 模型...</p>
             </div>
-          </div>
-
-          {/* Embedding 模型选择 */}
-          <div>
-            <label className="block text-xs text-gray-600 mb-2">
-              <span className="font-medium">Embedding 模型</span>
-              {selectedEmbed && (
-                <span className="ml-2 text-gray-400">
-                  ({selectedEmbed.dim} 维)
-                </span>
-              )}
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {EMBEDDING_MODELS.map((model) => (
-                <button
-                  key={model.id}
-                  onClick={() => onEmbeddingModelChange(model.id)}
-                  className={`p-2 text-left rounded-md border transition-all ${
-                    embeddingModel === model.id
-                      ? 'border-green-500 bg-green-50 ring-1 ring-green-500'
-                      : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="text-xs font-medium text-gray-800 truncate">
-                    {model.name}
-                  </div>
-                  <div className="text-[10px] text-gray-500 truncate">
-                    {model.description}
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 当前选择摘要 */}
-          <div className="mt-3 p-2 bg-white rounded border border-gray-200">
-            <div className="text-[10px] text-gray-500 mb-1">当前配置</div>
-            <div className="flex gap-4 text-xs">
+          ) : availableModels && availableModels.success ? (
+            <>
+              {/* LLM 模型选择 */}
               <div>
-                <span className="text-gray-500">LLM:</span>{' '}
-                <span className="font-medium text-blue-600">{selectedLLM?.name || llmModel}</span>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs text-gray-600 font-medium flex items-center gap-2">
+                    🤖 LLM 模型
+                    {availableModels.llmModels.length === 0 && (
+                      <span className="text-red-600">(未安装)</span>
+                    )}
+                  </label>
+                  <button
+                    onClick={loadAvailableModels}
+                    className="text-xs text-blue-600 hover:text-blue-800 underline"
+                  >
+                    刷新
+                  </button>
+                </div>
+                {availableModels.llmModels.length > 0 ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1">
+                      {availableModels.llmModels.map((model: any) => (
+                        <button
+                          key={model.name}
+                          onClick={() => onLLMModelChange(model.name)}
+                          className={`p-3 text-left rounded-lg border-2 transition-all ${
+                            llmModel === model.name
+                              ? 'border-purple-500 bg-purple-50 shadow-md'
+                              : 'border-gray-200 hover:border-purple-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="text-sm font-semibold text-gray-800 truncate">
+                              {model.displayName}
+                            </div>
+                            {llmModel === model.name && (
+                              <svg className="w-4 h-4 text-purple-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                              </svg>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-gray-500">{model.sizeFormatted}</div>
+                          <div className="text-[10px] text-gray-400 truncate">{model.tag}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2 text-xs text-gray-600 bg-purple-50 p-2 rounded border border-purple-200">
+                      当前使用: <span className="font-semibold text-purple-700">{llmModel}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-xs text-gray-600 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <div className="flex items-start gap-2 mb-2">
+                      <span className="text-lg">⚠️</span>
+                      <div>
+                        <div className="font-medium text-yellow-800 mb-1">未检测到 LLM 模型</div>
+                        <div className="text-yellow-700 mb-2">请安装至少一个 LLM 模型才能使用系统</div>
+                        <button
+                          onClick={() => setActiveTab('manage')}
+                          className="px-3 py-1 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-xs transition-colors"
+                        >
+                          去安装模型 →
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
+
+              {/* Embedding 模型选择 */}
               <div>
-                <span className="text-gray-500">Embedding:</span>{' '}
-                <span className="font-medium text-green-600">{selectedEmbed?.name || embeddingModel}</span>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs text-gray-600 font-medium flex items-center gap-2">
+                    🧬 Embedding 模型
+                    {availableModels.embeddingModels.length === 0 && (
+                      <span className="text-red-600">(未安装)</span>
+                    )}
+                  </label>
+                </div>
+                {availableModels.embeddingModels.length > 0 ? (
+                  <>
+                    <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-1">
+                      {availableModels.embeddingModels.map((model: any) => (
+                        <button
+                          key={model.name}
+                          onClick={() => onEmbeddingModelChange(model.name)}
+                          className={`p-3 text-left rounded-lg border-2 transition-all ${
+                            embeddingModel === model.name
+                              ? 'border-blue-500 bg-blue-50 shadow-md'
+                              : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <div className="text-sm font-semibold text-gray-800 truncate">
+                              {model.displayName}
+                            </div>
+                            {embeddingModel === model.name && (
+                              <svg className="w-4 h-4 text-blue-600" fill="currentColor" viewBox="0 0 20 20">
+                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                              </svg>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-gray-500">{model.sizeFormatted}</div>
+                          <div className="text-[10px] text-gray-400 truncate">{model.tag}</div>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="mt-2 text-xs text-gray-600 bg-blue-50 p-2 rounded border border-blue-200">
+                      当前使用: <span className="font-semibold text-blue-700">{embeddingModel}</span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="text-xs text-gray-600 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                    <div className="flex items-start gap-2 mb-2">
+                      <span className="text-lg">⚠️</span>
+                      <div>
+                        <div className="font-medium text-yellow-800 mb-1">未检测到 Embedding 模型</div>
+                        <div className="text-yellow-700 mb-2">Embedding 模型用于文本向量化，是 RAG 系统的核心</div>
+                        <button
+                          onClick={() => setActiveTab('manage')}
+                          className="px-3 py-1 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-xs transition-colors"
+                        >
+                          去安装模型 →
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 系统状态提示 */}
+              {availableModels.status && (
+                <div className={`p-3 rounded-lg text-xs border-2 ${
+                  availableModels.status.ready
+                    ? 'bg-green-50 text-green-700 border-green-300'
+                    : 'bg-yellow-50 text-yellow-700 border-yellow-300'
+                }`}>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-base">
+                      {availableModels.status.ready ? '✅' : '⚠️'}
+                    </span>
+                    <span className="font-semibold">
+                      {availableModels.status.ready ? '系统就绪' : '需要安装推荐模型'}
+                    </span>
+                  </div>
+                  {!availableModels.status.ready && (
+                    <div className="ml-6 text-[10px]">
+                      {!availableModels.status.hasRecommendedLLM && <div>• 缺少 LLM 模型</div>}
+                      {!availableModels.status.hasRecommendedEmbedding && <div>• 缺少 Embedding 模型</div>}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg p-4">
+              <div className="font-semibold mb-2">⚠️ 无法加载模型列表</div>
+              <div className="text-red-700 mb-3">
+                {availableModels?.error || '请确保 Ollama 服务正在运行'}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={loadAvailableModels}
+                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white rounded text-xs transition-colors"
+                >
+                  重试
+                </button>
+                <button
+                  onClick={() => setActiveTab('manage')}
+                  className="px-3 py-1 bg-gray-600 hover:bg-gray-700 text-white rounded text-xs transition-colors"
+                >
+                  查看详情
+                </button>
               </div>
             </div>
-          </div>
+          )}
         </div>
+      )}
+
+      {activeTab === 'manage' && (
+        <ModelManagementPanel
+          currentLLM={llmModel}
+          currentEmbedding={embeddingModel}
+          onModelSelect={(type, name) => {
+            if (type === 'llm') {
+              onLLMModelChange(name);
+            } else {
+              onEmbeddingModelChange(name);
+            }
+            loadAvailableModels(); // 刷新模型列表
+            setActiveTab('model'); // 切换回模型选择标签
+          }}
+        />
       )}
     </div>
   );

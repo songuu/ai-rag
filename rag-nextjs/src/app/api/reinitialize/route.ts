@@ -1,15 +1,41 @@
-import { NextResponse } from 'next/server';
-import { getRagSystem } from '@/lib/rag-instance';
+import { NextRequest, NextResponse } from 'next/server';
+import { getRagSystem, resetRagSystem } from '@/lib/rag-instance';
 import { readdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
+import { LocalRAGSystem } from '@/lib/rag-system';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
 
 // POST /api/reinitialize - 重新初始化 RAG 系统
-export async function POST() {
+export async function POST(request: NextRequest) {
   try {
-    const ragSystem = await getRagSystem();
+    // 获取请求体中的模型配置（如果有）
+    let llmModel = 'llama3.1';
+    let embeddingModel = 'nomic-embed-text';
+    
+    try {
+      const body = await request.json();
+      if (body.llmModel) llmModel = body.llmModel;
+      if (body.embeddingModel) embeddingModel = body.embeddingModel;
+      console.log(`[Reinitialize] 使用模型 - LLM: ${llmModel}, Embedding: ${embeddingModel}`);
+    } catch {
+      // 如果没有 body，使用默认值
+      console.log('[Reinitialize] 使用默认模型配置');
+    }
+    
+    // 如果指定了新模型，先重置实例
+    resetRagSystem();
+    
+    // 创建新实例（使用指定的模型）
+    const instance = new LocalRAGSystem({
+      ollamaBaseUrl: "http://localhost:11434",
+      llmModel,
+      embeddingModel,
+    });
+    
+    // 初始化数据库
+    await instance.initializeDatabase();
     
     // 重新加载所有上传的文件
     if (existsSync(UPLOAD_DIR)) {
@@ -28,15 +54,20 @@ export async function POST() {
       console.log(`[Reinitialize] 找到 ${documents.length} 个有效文档`);
       
       // 重新初始化系统
-      await ragSystem.reinitialize(documents);
+      await instance.reinitialize(documents);
     } else {
       // 如果没有文件，清空系统
-      await ragSystem.reinitialize([]);
+      await instance.reinitialize([]);
     }
+    
+    // 将新实例设置为全局实例
+    (global as any).ragSystemInstance = instance;
 
     return NextResponse.json({
       success: true,
-      message: '系统重新初始化成功'
+      message: '系统重新初始化成功',
+      llmModel,
+      embeddingModel
     });
   } catch (error) {
     console.error('重新初始化错误:', error);
