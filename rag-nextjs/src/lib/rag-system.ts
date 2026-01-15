@@ -887,4 +887,21 @@ export class LocalRAGSystem {
       embeddingDimension: this.vectorStore?.getEmbeddingDimension() || 0
     };
   }
+
+  // 获取统计信息（兼容旧接口）
+  getStats() {
+    return this.getStatus();
+  }
+
+  // 公开的相似度搜索方法
+  async similaritySearch(
+    query: string,
+    topK: number = 5,
+    threshold: number = 0.3
+  ): Promise<RetrievalDetails> {
+    if (!this.isInitialized) {
+      throw new Error("RAG 系统尚未初始化，请先调用 initializeDatabase()");
+    }
+    return this.vectorStore.similaritySearchWithDetails(query, topK, threshold);
+  }
 }

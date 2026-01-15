@@ -712,12 +712,19 @@ export default function HomePage() {
                   <i className="fas fa-sitemap mr-2"></i>
                   Trace-Trie 分析
                 </Link>
-                <Link 
-                  href="/domain-vectors" 
+                <Link
+                  href="/domain-vectors"
                   className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-emerald-600 bg-emerald-100 hover:bg-emerald-200 transition-colors"
                 >
                   <i className="fas fa-crosshairs mr-2"></i>
                   领域向量
+                </Link>
+                <Link
+                  href="/self-rag"
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 transition-colors"
+                >
+                  <i className="fas fa-sync-alt mr-2"></i>
+                  Self-RAG
                 </Link>
                 <button
                   onClick={handleDeleteAllConversations}
