@@ -120,7 +120,7 @@ export default function TraceTrieVisualization({
   // 渲染语义密度警告面板
   const renderWarningsPanel = () => {
     if (semanticWarnings.length === 0) return null;
-    
+
     return (
       <div className="bg-white rounded-xl border border-slate-200 p-5 mb-6">
         <div className="flex items-center justify-between mb-4">
@@ -131,7 +131,7 @@ export default function TraceTrieVisualization({
             语义密度分析警告
             <span className="text-sm font-normal text-slate-500">({semanticWarnings.length})</span>
           </h3>
-          <button
+              <button
             onClick={() => setShowWarnings(!showWarnings)}
             className="text-sm text-slate-500 hover:text-slate-700"
           >
@@ -265,25 +265,25 @@ export default function TraceTrieVisualization({
                       <span className="font-semibold text-slate-700">{stageInfo.label}</span>
                       <span className="text-xs text-slate-400">
                         ({stage.tokens.length} tokens)
-                      </span>
+              </span>
                     </div>
                     {stage.processingTime > 0 && (
                       <span className="text-xs text-slate-400">
                         耗时: {stage.processingTime}ms
                       </span>
                     )}
-                  </div>
+            </div>
 
                   {/* Token 展示 */}
                   <div className="flex flex-wrap gap-1.5">
                     {stage.tokens.map((token, tokenIndex) => {
-                      const vectorWeight = vectorWeights.find(v => v.tokenId === token.tokenId);
-                      const density = densityInfos.find(d => d.tokenId === token.tokenId);
-                      
+                const vectorWeight = vectorWeights.find(v => v.tokenId === token.tokenId);
+                const density = densityInfos.find(d => d.tokenId === token.tokenId);
+                
                       // 计算样式
-                      const magnitude = vectorWeight?.vectorMagnitude || 0.5;
+                const magnitude = vectorWeight?.vectorMagnitude || 0.5;
                       const isHighWeight = magnitude > 0.8;
-                      const densityValue = density?.density || 1;
+                const densityValue = density?.density || 1;
                       const isLowDensity = densityValue < 0.5;
                       const isFallback = token.decisionPoint?.decisionType === 'fallback';
                       
@@ -303,13 +303,13 @@ export default function TraceTrieVisualization({
                         }
                       }
 
-                      return (
-                        <div
+                return (
+                  <div
                           key={tokenIndex}
-                          onClick={() => handleTokenClick(token)}
+                    onClick={() => handleTokenClick(token)}
                           className={`${bgClass} px-2 py-1 rounded-md cursor-pointer hover:ring-2 hover:ring-indigo-400 transition-all text-sm font-mono relative group`}
-                          title={`Token: ${token.token}\nID: ${token.tokenId}\n权重: ${magnitude.toFixed(3)}\n密度: ${densityValue.toFixed(2)}`}
-                        >
+                    title={`Token: ${token.token}\nID: ${token.tokenId}\n权重: ${magnitude.toFixed(3)}\n密度: ${densityValue.toFixed(2)}`}
+                  >
                           {/* 高权重标记 */}
                           {isHighWeight && (
                             <span className="absolute -top-1 -right-1 w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></span>
@@ -330,10 +330,10 @@ export default function TraceTrieVisualization({
                               {token.mergeRank && <div>合并等级: {token.mergeRank}</div>}
                             </div>
                           </div>
-                        </div>
-                      );
-                    })}
                   </div>
+                );
+              })}
+            </div>
 
                   {/* 合并操作 - 只在 subwords 阶段显示 */}
                   {stage.level === 'subwords' && stage.mergeOperations.length > 0 && (
@@ -346,10 +346,10 @@ export default function TraceTrieVisualization({
                       </h4>
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                         {stage.mergeOperations.slice(0, 6).map((op, opIndex) => (
-                          <div
+                    <div
                             key={opIndex}
                             className="flex items-center gap-2 bg-slate-50 rounded-lg p-2 text-xs"
-                          >
+                    >
                             <span className="font-mono bg-white px-1.5 py-0.5 rounded border">{op.left}</span>
                             <span className="text-slate-400">+</span>
                             <span className="font-mono bg-white px-1.5 py-0.5 rounded border">{op.right}</span>
@@ -370,7 +370,7 @@ export default function TraceTrieVisualization({
               </div>
             );
           })}
-        </div>
+          </div>
 
         {/* 选中 Token 的详细决策路径 */}
         {selectedToken?.decisionPoint && (
@@ -406,28 +406,28 @@ export default function TraceTrieVisualization({
               </div>
             </div>
             
-            {selectedToken.decisionPoint.candidates.length > 0 && (
+              {selectedToken.decisionPoint.candidates.length > 0 && (
               <div className="mt-4">
                 <div className="text-xs font-semibold text-amber-700 mb-2">候选列表:</div>
                 <div className="flex flex-wrap gap-2">
-                  {selectedToken.decisionPoint.candidates.map((candidate, idx) => (
-                    <div
-                      key={idx}
+                    {selectedToken.decisionPoint.candidates.map((candidate, idx) => (
+                      <div
+                        key={idx}
                       className={`px-3 py-1.5 rounded-lg text-sm ${
-                        candidate.token === selectedToken.decisionPoint!.selectedCandidate
+                          candidate.token === selectedToken.decisionPoint!.selectedCandidate
                           ? 'bg-indigo-500 text-white font-semibold'
                           : 'bg-white border border-slate-200 text-slate-600'
-                      }`}
-                    >
+                        }`}
+                      >
                       <span className="font-mono">{candidate.token}</span>
                       <span className="text-xs opacity-70 ml-2">
                         Score: {candidate.score.toFixed(3)}
                       </span>
-                    </div>
-                  ))}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
           </div>
         )}
       </div>
@@ -524,12 +524,12 @@ export default function TraceTrieVisualization({
                     </strong></span>
                   </div>
                 </div>
-                
+
                 <div className="p-5">
                   {/* 热力图风格的 Token 展示 */}
                   <div className="flex flex-wrap gap-1 mb-4">
-                    {comparison.tokenization.tokens.map((token, tokenIndex) => {
-                      const density = token.density?.density || 1;
+                  {comparison.tokenization.tokens.map((token, tokenIndex) => {
+                    const density = token.density?.density || 1;
                       const vectorWeight = token.vectorWeight?.vectorMagnitude || 0.5;
                       
                       // 根据密度和权重计算颜色
@@ -543,17 +543,17 @@ export default function TraceTrieVisualization({
                       } else {
                         bgClass = 'bg-amber-100 text-amber-800';
                       }
-                      
-                      return (
-                        <span
-                          key={tokenIndex}
+                    
+                    return (
+                      <span
+                        key={tokenIndex}
                           className={`${bgClass} px-1.5 py-0.5 rounded text-xs font-mono`}
                           title={`${token.token}\n密度: ${density.toFixed(2)}\n权重: ${vectorWeight.toFixed(3)}`}
-                        >
-                          {token.token}
-                        </span>
-                      );
-                    })}
+                      >
+                        {token.token}
+                      </span>
+                    );
+                  })}
                   </div>
                   
                   {/* 评分详情 */}
@@ -730,7 +730,7 @@ export default function TraceTrieVisualization({
       {modelComparisons.length > 0 && (
         <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-6">
           {renderModelComparison()}
-        </div>
+      </div>
       )}
 
       {/* 分布象限图 */}

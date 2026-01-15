@@ -118,8 +118,8 @@ export class VectorWeightAnalyzer {
 
       // 使用估算方法（@xenova/transformers 的向量提取比较复杂）
       // 基于 tokenId 和 token 特征进行估算
-      vectorMagnitude = this.estimateMagnitude(token, tokenId);
-      semanticUniqueness = this.calculateSemanticUniqueness(token, tokenId);
+        vectorMagnitude = this.estimateMagnitude(token, tokenId);
+        semanticUniqueness = this.calculateSemanticUniqueness(token, tokenId);
 
       results.push({
         token,
@@ -442,9 +442,9 @@ export class ModelComparisonAnalyzer {
         
         if (idToToken.size > 0) {
           tokens = encoded.map((tokenId: number) => ({
-            token: idToToken.get(tokenId) || `[UNK:${tokenId}]`,
-            tokenId
-          }));
+          token: idToToken.get(tokenId) || `[UNK:${tokenId}]`,
+          tokenId
+        }));
         } else {
           // 使用 decode 方式获取 token 字符串
           const decodedTokens = tokenizer.batch_decode(

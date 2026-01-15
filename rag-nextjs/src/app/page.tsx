@@ -726,6 +726,13 @@ export default function HomePage() {
                   <i className="fas fa-sync-alt mr-2"></i>
                   Self-RAG
                 </Link>
+                <Link
+                  href="/milvus"
+                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-purple-600 bg-purple-100 hover:bg-purple-200 transition-colors"
+                >
+                  <i className="fas fa-database mr-2"></i>
+                  Milvus
+                </Link>
                 <button
                   onClick={handleDeleteAllConversations}
                   className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-red-600 bg-red-100 hover:bg-red-200 transition-colors"
