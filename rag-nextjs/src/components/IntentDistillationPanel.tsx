@@ -18,6 +18,15 @@ interface IntentDistillationResult {
     keywords: string[];
     reasoning: string;
   };
+  queryExpansion: {
+    originalKeywords: string[];
+    synonyms: Record<string, string[]>;
+    relatedTerms: string[];
+    expandedQueries: string[];
+    reasoning: string;
+    totalSynonyms: number;
+    totalRelated: number;
+  };
   queryRewrite: {
     original: string;
     rewritten: string[];
@@ -221,6 +230,142 @@ export default function IntentDistillationPanel({ query, onQuerySelect }: Intent
                   </span>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Query Expansion - 关键词扩展 */}
+          {result.queryExpansion && (
+            <div className="bg-gradient-to-br from-green-50 to-teal-50 border-2 border-green-200 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-base font-bold text-gray-800 flex items-center gap-2">
+                  <span className="text-xl">🔍</span>
+                  Query Expansion - 关键词扩展
+                </h4>
+                <div className="flex gap-2 text-xs">
+                  <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full font-medium">
+                    {result.queryExpansion.totalSynonyms} 个同义词
+                  </span>
+                  <span className="px-2 py-1 bg-teal-100 text-teal-700 rounded-full font-medium">
+                    {result.queryExpansion.totalRelated} 个相关词
+                  </span>
+                </div>
+              </div>
+
+              {/* 原始关键词 */}
+              {result.queryExpansion.originalKeywords.length > 0 && (
+                <div className="mb-4">
+                  <div className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                    原始关键词
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {result.queryExpansion.originalKeywords.map((keyword, index) => (
+                      <span
+                        key={index}
+                        className="px-3 py-1.5 bg-white text-gray-800 rounded-lg text-sm font-semibold border-2 border-green-300 shadow-sm"
+                      >
+                        {keyword}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 同义词扩展 */}
+              {Object.keys(result.queryExpansion.synonyms).length > 0 && (
+                <div className="mb-4">
+                  <div className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                    同义词扩展
+                  </div>
+                  <div className="space-y-3">
+                    {Object.entries(result.queryExpansion.synonyms).map(([keyword, synonyms], index) => (
+                      <div key={index} className="bg-white/70 rounded-lg p-3 border border-green-200">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-sm font-bold text-green-700">{keyword}</span>
+                          <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+                          </svg>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {synonyms.map((synonym, sIndex) => (
+                            <span
+                              key={sIndex}
+                              className="px-2.5 py-1 bg-green-100 text-green-800 rounded-md text-xs font-medium hover:bg-green-200 transition-colors cursor-default"
+                              title="点击使用此同义词"
+                            >
+                              {synonym}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 相关术语 */}
+              {result.queryExpansion.relatedTerms.length > 0 && (
+                <div className="mb-4">
+                  <div className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                    相关术语 (基于领域上下文)
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {result.queryExpansion.relatedTerms.map((term, index) => (
+                      <span
+                        key={index}
+                        className="px-3 py-1.5 bg-teal-100 text-teal-800 rounded-lg text-sm font-medium border border-teal-300 hover:bg-teal-200 transition-colors cursor-default"
+                        title="相关领域术语"
+                      >
+                        {term}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 扩展查询 */}
+              {result.queryExpansion.expandedQueries.length > 0 && (
+                <div>
+                  <div className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">
+                    扩展查询建议
+                  </div>
+                  <div className="space-y-2">
+                    {result.queryExpansion.expandedQueries.map((expandedQuery, index) => (
+                      <div
+                        key={index}
+                        className="flex items-center gap-3 p-3 bg-white/80 hover:bg-white rounded-lg transition-colors group border border-green-200"
+                      >
+                        <div className="w-6 h-6 rounded-full bg-gradient-to-br from-green-500 to-teal-500 text-white flex items-center justify-center text-xs font-bold shrink-0">
+                          {index + 1}
+                        </div>
+                        <div className="flex-1 text-sm text-gray-700 leading-relaxed">{expandedQuery}</div>
+                        {onQuerySelect && (
+                          <button
+                            onClick={() => onQuerySelect(expandedQuery)}
+                            className="opacity-0 group-hover:opacity-100 px-3 py-1.5 bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-700 hover:to-teal-700 text-white text-xs rounded-md transition-all font-medium"
+                          >
+                            使用
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* 扩展推理说明 */}
+              {result.queryExpansion.reasoning && (
+                <details className="mt-4">
+                  <summary className="cursor-pointer text-xs text-gray-600 hover:text-gray-800 transition-colors flex items-center gap-1">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    扩展推理说明
+                  </summary>
+                  <div className="mt-2 p-3 bg-white/60 rounded-lg text-xs text-gray-600 leading-relaxed border border-green-200">
+                    {result.queryExpansion.reasoning}
+                  </div>
+                </details>
+              )}
             </div>
           )}
 

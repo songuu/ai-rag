@@ -93,6 +93,93 @@ async function analyzeDomainDistribution(query: string): Promise<{
   };
 }
 
+// Query Expansion - 关键词扩展
+async function expandQueryKeywords(query: string, domainContext: any): Promise<{
+  originalKeywords: string[];
+  synonyms: Record<string, string[]>;
+  relatedTerms: string[];
+  expandedQueries: string[];
+  reasoning: string;
+}> {
+  const topDomainName = domainContext.topDomain?.name || '通用';
+  
+  const prompt = `你是一个专业的语义扩展专家。请分析以下查询并进行关键词扩展。
+
+用户查询: "${query}"
+主要领域: ${topDomainName}
+
+请完成以下任务：
+1. 提取原始查询中的核心关键词（3-5个）
+2. 为每个关键词提供2-3个同义词或近义词
+3. 根据领域上下文，提供5-8个相关术语
+4. 生成2-3个包含扩展关键词的优化查询
+
+请以JSON格式返回（只输出JSON，不要其他内容）：
+{
+  "originalKeywords": ["关键词1", "关键词2", "关键词3"],
+  "synonyms": {
+    "关键词1": ["同义词1", "同义词2"],
+    "关键词2": ["同义词1", "同义词2"]
+  },
+  "relatedTerms": ["相关术语1", "相关术语2", "相关术语3", "相关术语4", "相关术语5"],
+  "expandedQueries": [
+    "包含同义词的扩展查询1",
+    "包含相关术语的扩展查询2"
+  ],
+  "reasoning": "扩展推理：解释为什么选择这些同义词和相关术语"
+}`;
+
+  try {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: LLM_MODEL,
+        prompt,
+        stream: false,
+        options: {
+          temperature: 0.4,
+          top_p: 0.9,
+          num_predict: 1000
+        }
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error('Query expansion LLM request failed');
+    }
+
+    const data = await response.json();
+    const responseText = data.response || '';
+    
+    // 提取 JSON
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        originalKeywords: parsed.originalKeywords || [],
+        synonyms: parsed.synonyms || {},
+        relatedTerms: parsed.relatedTerms || [],
+        expandedQueries: parsed.expandedQueries || [],
+        reasoning: parsed.reasoning || '自动扩展分析'
+      };
+    }
+    
+    throw new Error('Failed to parse query expansion response');
+  } catch (error) {
+    console.error('Query expansion failed:', error);
+    // 返回基础结果
+    const words = query.split(/[\s,，、]+/).filter(w => w.length > 1);
+    return {
+      originalKeywords: words.slice(0, 3),
+      synonyms: {},
+      relatedTerms: [],
+      expandedQueries: [query],
+      reasoning: '扩展失败，使用原始查询'
+    };
+  }
+}
+
 // 使用 LLM 进行意图分析
 async function analyzeIntentWithLLM(query: string, domainContext: any): Promise<{
   intent: string;
@@ -298,6 +385,10 @@ export async function POST(request: NextRequest) {
     console.log('[Intent Distillation] Step 2: LLM intent analysis');
     const intentAnalysis = await analyzeIntentWithLLM(query, domainAnalysis);
     
+    // 步骤 2.5: Query Expansion - 关键词扩展
+    console.log('[Intent Distillation] Step 2.5: Query expansion');
+    const queryExpansion = await expandQueryKeywords(query, domainAnalysis);
+    
     // 步骤 3: 查询改写
     let queryRewrite = null;
     if (includeRewrite) {
@@ -367,6 +458,17 @@ export async function POST(request: NextRequest) {
         confidence: intentAnalysis.confidence,
         keywords: intentAnalysis.keywords,
         reasoning: intentAnalysis.reasoning
+      },
+      
+      // Query Expansion - 关键词扩展
+      queryExpansion: {
+        originalKeywords: queryExpansion.originalKeywords,
+        synonyms: queryExpansion.synonyms,
+        relatedTerms: queryExpansion.relatedTerms,
+        expandedQueries: queryExpansion.expandedQueries,
+        reasoning: queryExpansion.reasoning,
+        totalSynonyms: Object.values(queryExpansion.synonyms).flat().length,
+        totalRelated: queryExpansion.relatedTerms.length
       },
       
       // 查询改写
