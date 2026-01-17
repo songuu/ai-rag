@@ -24,7 +24,7 @@ export default function Toast({ toasts }: ToastProps) {
         };
         return (
           <div
-            key={toast.id}
+            key={toast.id + toast.message + toast.type}
             className={`${colors[toast.type]} text-white px-4 py-2 rounded-lg shadow-lg flex items-center space-x-2 animate-slide-in`}
           >
             <span className="text-sm">{toast.message}</span>

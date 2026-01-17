@@ -83,7 +83,7 @@ export default function MilvusQueryVisualizer({
   const abortControllerRef = useRef<AbortController | null>(null);
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  const SEARCH_TIMEOUT = 15000;
+  const SEARCH_TIMEOUT = 60000;
 
   // 检查 Milvus 状态
   const checkMilvusStatus = useCallback(async () => {
@@ -280,7 +280,7 @@ export default function MilvusQueryVisualizer({
   // 折叠状态的紧凑视图
   if (!isExpanded) {
     return (
-      <div className={`bg-white rounded-lg border shadow-sm ${className}`}>
+      <div className={`bg-white rounded-lg border shadow-sm ${className} mb-4`}>
         <button
           onClick={() => setIsExpanded(true)}
           className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 transition-colors"
@@ -321,7 +321,7 @@ export default function MilvusQueryVisualizer({
 
   // 展开状态
   return (
-    <div className={`bg-white rounded-lg border shadow-sm overflow-hidden ${className}`}>
+    <div className={`bg-white rounded-lg border shadow-sm overflow-hidden ${className} mb-4`}>
       {/* 头部 */}
       <div className="px-4 py-3 border-b bg-gray-50 flex items-center justify-between">
         <div className="flex items-center gap-3">

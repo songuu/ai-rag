@@ -16,11 +16,12 @@ import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { MilvusVectorStore, MilvusDocument, getMilvusInstance } from './milvus-client';
 import { v4 as uuidv4 } from 'uuid';
+import * as XLSX from 'xlsx';
 
 // ============== 类型定义 ==============
 
 // 支持的数据源类型
-export type DataSourceType = 'text' | 'pdf' | 'docx' | 'url' | 'youtube' | 'raw';
+export type DataSourceType = 'text' | 'pdf' | 'docx' | 'xlsx' | 'csv' | 'json' | 'markdown' | 'url' | 'youtube' | 'raw';
 
 // 文档元数据
 export interface DocumentMetadata {
@@ -166,6 +167,116 @@ export async function loadDocxFile(buffer: Buffer, filename: string): Promise<Lo
         createdAt: new Date().toISOString(),
       }
     };
+  }
+}
+
+/**
+ * Excel 文件加载器 (xlsx, xls, csv)
+ */
+export async function loadExcelFile(buffer: Buffer, filename: string): Promise<LoadedDocument> {
+  try {
+    const workbook = XLSX.read(buffer, { type: 'buffer' });
+    const sheets: string[] = workbook.SheetNames;
+    
+    // 将所有工作表内容合并
+    const contents: string[] = [];
+    
+    for (const sheetName of sheets) {
+      const worksheet = workbook.Sheets[sheetName];
+      
+      // 转换为 JSON 格式
+      const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as unknown[][];
+      
+      if (jsonData.length > 0) {
+        contents.push(`## 工作表: ${sheetName}\n`);
+        
+        // 获取表头
+        const headers = jsonData[0] as string[];
+        
+        // 构建表格内容
+        for (let i = 0; i < jsonData.length; i++) {
+          const row = jsonData[i] as unknown[];
+          if (row.length === 0) continue;
+          
+          if (i === 0) {
+            // 表头行
+            contents.push(`| ${row.join(' | ')} |`);
+            contents.push(`| ${row.map(() => '---').join(' | ')} |`);
+          } else {
+            // 数据行 - 确保每个单元格都有值
+            const cells = headers.map((_, idx) => {
+              const cell = row[idx];
+              return cell !== undefined && cell !== null ? String(cell) : '';
+            });
+            contents.push(`| ${cells.join(' | ')} |`);
+          }
+        }
+        contents.push('\n');
+      }
+    }
+    
+    return {
+      content: contents.join('\n'),
+      metadata: {
+        source: filename,
+        type: 'xlsx',
+        title: filename,
+        sheets,
+        createdAt: new Date().toISOString(),
+      }
+    };
+  } catch (error) {
+    throw new Error(`Excel 解析失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * JSON 文件加载器
+ */
+export async function loadJsonFile(buffer: Buffer, filename: string): Promise<LoadedDocument> {
+  try {
+    const content = buffer.toString('utf-8');
+    // 验证 JSON 格式
+    const parsed = JSON.parse(content);
+    // 格式化输出
+    const formattedContent = JSON.stringify(parsed, null, 2);
+    
+    return {
+      content: formattedContent,
+      metadata: {
+        source: filename,
+        type: 'json',
+        title: filename,
+        createdAt: new Date().toISOString(),
+      }
+    };
+  } catch (error) {
+    throw new Error(`JSON 解析失败: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Markdown 文件加载器
+ */
+export async function loadMarkdownFile(buffer: Buffer, filename: string): Promise<LoadedDocument> {
+  try {
+    const content = buffer.toString('utf-8');
+    
+    // 提取标题（如果有）
+    const titleMatch = content.match(/^#\s+(.+)$/m);
+    const title = titleMatch ? titleMatch[1] : filename;
+    
+    return {
+      content: content.trim(),
+      metadata: {
+        source: filename,
+        type: 'markdown',
+        title,
+        createdAt: new Date().toISOString(),
+      }
+    };
+  } catch (error) {
+    throw new Error(`Markdown 解析失败: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -375,12 +486,29 @@ export async function loadDocument(
   if (Buffer.isBuffer(input)) {
     const ext = filename?.toLowerCase().split('.').pop();
     
+    // PDF
     if (ext === 'pdf' || type === 'pdf') {
       return loadPdfFile(input, filename || 'document.pdf');
     }
     
-    if (ext === 'docx' || type === 'docx') {
+    // Word
+    if (ext === 'docx' || ext === 'doc' || type === 'docx') {
       return loadDocxFile(input, filename || 'document.docx');
+    }
+    
+    // Excel / CSV
+    if (ext === 'xlsx' || ext === 'xls' || ext === 'csv' || type === 'xlsx' || type === 'csv') {
+      return loadExcelFile(input, filename || 'document.xlsx');
+    }
+    
+    // JSON
+    if (ext === 'json' || type === 'json') {
+      return loadJsonFile(input, filename || 'document.json');
+    }
+    
+    // Markdown
+    if (ext === 'md' || ext === 'markdown' || type === 'markdown') {
+      return loadMarkdownFile(input, filename || 'document.md');
     }
     
     // 默认作为文本处理
@@ -740,6 +868,32 @@ export async function processPdfToMilvus(
 ): Promise<string[]> {
   const pipeline = new DocumentPipeline(config);
   const result = await pipeline.processDocument(buffer, { type: 'pdf', filename });
+  return result.ids;
+}
+
+/**
+ * 快速处理 Excel 到 Milvus
+ */
+export async function processExcelToMilvus(
+  buffer: Buffer,
+  filename: string,
+  config: PipelineConfig = {}
+): Promise<string[]> {
+  const pipeline = new DocumentPipeline(config);
+  const result = await pipeline.processDocument(buffer, { type: 'xlsx', filename });
+  return result.ids;
+}
+
+/**
+ * 快速处理 Markdown 到 Milvus
+ */
+export async function processMarkdownToMilvus(
+  buffer: Buffer,
+  filename: string,
+  config: PipelineConfig = {}
+): Promise<string[]> {
+  const pipeline = new DocumentPipeline(config);
+  const result = await pipeline.processDocument(buffer, { type: 'markdown', filename });
   return result.ids;
 }
 

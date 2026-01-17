@@ -269,9 +269,13 @@ async function handleFileUpload(request: NextRequest) {
       const ext = filename.toLowerCase().split('.').pop();
       
       try {
+        // 根据扩展名确定文件类型
         let type: DataSourceType = 'text';
         if (ext === 'pdf') type = 'pdf';
         else if (ext === 'docx' || ext === 'doc') type = 'docx';
+        else if (ext === 'xlsx' || ext === 'xls' || ext === 'csv') type = 'xlsx';
+        else if (ext === 'json') type = 'json';
+        else if (ext === 'md' || ext === 'markdown') type = 'markdown';
         
         const buffer = Buffer.from(await file.arrayBuffer());
         
@@ -327,11 +331,14 @@ export async function GET(request: NextRequest) {
           success: true,
           pipeline: {
             name: 'Document Processing Pipeline',
-            version: '1.0.0',
+            version: '1.1.0',
             supportedFormats: [
               { type: 'text', extensions: ['.txt'], description: '纯文本文件' },
               { type: 'pdf', extensions: ['.pdf'], description: 'PDF 文档' },
               { type: 'docx', extensions: ['.docx', '.doc'], description: 'Word 文档' },
+              { type: 'xlsx', extensions: ['.xlsx', '.xls', '.csv'], description: 'Excel 表格 / CSV' },
+              { type: 'markdown', extensions: ['.md', '.markdown'], description: 'Markdown 文档' },
+              { type: 'json', extensions: ['.json'], description: 'JSON 数据' },
               { type: 'url', extensions: [], description: '网页 URL' },
               { type: 'youtube', extensions: [], description: 'YouTube 视频' },
             ],

@@ -69,27 +69,27 @@ export default function HomePage() {
   const [retrievalDetails, setRetrievalDetails] = useState<any>(null);
   const [vectorizationDetails, setVectorizationDetails] = useState<any>(null);
   const [showIntentDistillation, setShowIntentDistillation] = useState(false);
-  
+
   // Milvus 相关状态
   const [storageBackend, setStorageBackend] = useState<'memory' | 'milvus'>('memory');
   const [milvusConnected, setMilvusConnected] = useState(false);
   const [milvusStats, setMilvusStats] = useState<any>(null);
-  
+
   const socketRef = useRef<Socket | null>(null);
 
   // 初始化 WebSocket
   useEffect(() => {
     if (typeof window !== 'undefined') {
       socketRef.current = io();
-      
+
       socketRef.current.on('connect', () => {
         showToast('实时监控连接成功', 'success');
       });
-      
+
       socketRef.current.on('disconnect', () => {
         showToast('实时监控连接断开', 'warning');
       });
-      
+
       socketRef.current.on('vectorization-progress', (progress: any) => {
         setShowVectorization(true);
         setVectorizationDetails(progress);
@@ -100,7 +100,7 @@ export default function HomePage() {
         }
         setVectorizationStatus(progress.status || progress.message || '处理中...');
       });
-      
+
       socketRef.current.on('query-vectorization-progress', (progress: any) => {
         setShowQueryProcessing(true);
         setQueryProcessingStatus(progress.status || progress.message || '处理中...');
@@ -117,11 +117,11 @@ export default function HomePage() {
           }));
         }
       });
-      
+
       socketRef.current.on('retrieval-details', (details: any) => {
         setRetrievalDetails(details);
       });
-      
+
       return () => {
         if (socketRef.current) {
           socketRef.current.disconnect();
@@ -169,18 +169,18 @@ export default function HomePage() {
       showToast('Milvus 未连接，请先确保 Milvus 服务正常运行', 'warning');
       return;
     }
-    
+
     setStorageBackend(backend);
     showToast(`已切换到 ${backend === 'milvus' ? 'Milvus 向量数据库' : '内存存储'}`, 'success');
-    
+
     if (backend === 'milvus') {
       await checkMilvusStatus();
-      
+
       // 检查是否需要同步
       try {
         const syncCheckRes = await fetch('/api/milvus/sync');
         const syncCheck = await syncCheckRes.json();
-        
+
         if (syncCheck.success && syncCheck.needsSync) {
           // Milvus 为空但有可同步的数据
           if (syncCheck.memory?.documentCount > 0) {
@@ -211,7 +211,7 @@ export default function HomePage() {
   // 删除文件
   const handleDeleteFile = async (filename: string) => {
     if (!confirm(`确定要删除文件 "${filename}" 吗？`)) return;
-    
+
     try {
       const response = await fetch(`/api/files/${encodeURIComponent(filename)}`, {
         method: 'DELETE'
@@ -291,7 +291,7 @@ export default function HomePage() {
   // 重新初始化
   const handleReinitialize = async () => {
     if (!confirm('确定要重新初始化系统吗？这将重新加载所有文档。')) return;
-    
+
     try {
       const response = await fetch('/api/reinitialize', { method: 'POST' });
       const data = await response.json();
@@ -310,7 +310,7 @@ export default function HomePage() {
   // 处理模型切换
   const handleModelChange = async (newLlmModel: string, newEmbeddingModel: string) => {
     const hasChanged = newLlmModel !== llmModel || newEmbeddingModel !== embeddingModel;
-    
+
     if (!hasChanged) {
       showToast('模型未做任何更改', 'info');
       return;
@@ -319,13 +319,13 @@ export default function HomePage() {
     try {
       showToast('正在切换模型...', 'info');
       setSystemStatus('重新初始化中...');
-      
+
       // 更新模型状态
       setLlmModel(newLlmModel);
       setEmbeddingModel(newEmbeddingModel);
-      
+
       // 调用重新初始化 API（使用新模型）
-      const response = await fetch('/api/reinitialize', { 
+      const response = await fetch('/api/reinitialize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -333,9 +333,9 @@ export default function HomePage() {
           embeddingModel: newEmbeddingModel
         })
       });
-      
+
       const data = await response.json();
-      
+
       if (data.success) {
         showToast(`模型切换成功: ${newLlmModel.split(':')[0]}`, 'success');
         checkSystemHealth();
@@ -386,7 +386,7 @@ export default function HomePage() {
     try {
       console.log('[IndexedDB] 保存消息:', message.id, message.type);
       await dbManager.init();
-      
+
       if (!currentConversationId) {
         console.log('[IndexedDB] 创建新对话');
         const conversation = await dbManager.createNewConversation(
@@ -395,14 +395,14 @@ export default function HomePage() {
         setCurrentConversationId(conversation.id);
         console.log('[IndexedDB] 新对话 ID:', conversation.id);
       }
-      
+
       if (currentConversationId) {
         // 确保时间戳是 Date 对象
         const messageToSave: ConversationMessage = {
           ...message,
           timestamp: message.timestamp instanceof Date ? message.timestamp : new Date(message.timestamp)
         };
-        
+
         await dbManager.addMessageToConversation(currentConversationId, messageToSave);
         console.log('[IndexedDB] 消息已保存到对话:', currentConversationId);
       }
@@ -417,34 +417,34 @@ export default function HomePage() {
     try {
       console.log('[IndexedDB] 开始加载最新对话...');
       await dbManager.init();
-      
+
       // 先尝试获取所有对话，看看数据库里有什么
       const allConversations = await dbManager.getAllConversations();
       console.log(`[IndexedDB] 数据库中共有 ${allConversations.length} 个对话`);
-      
+
       if (allConversations.length > 0) {
         allConversations.forEach((conv, index) => {
           console.log(`[IndexedDB] 对话 ${index + 1}: ID=${conv.id}, 消息数=${conv.messages?.length || 0}, 更新时间=${conv.updatedAt}`);
         });
       }
-      
+
       const latestConv = await dbManager.getLatestConversation();
-      
+
       if (latestConv) {
         console.log(`[IndexedDB] 找到最新对话: ${latestConv.id}`);
         console.log(`[IndexedDB] 对话消息数: ${latestConv.messages?.length || 0}`);
-        
+
         if (latestConv.messages && latestConv.messages.length > 0) {
           setCurrentConversationId(latestConv.id);
-          
+
           // 确保时间戳正确转换
           const restoredMessages: Message[] = latestConv.messages.map((msg, index) => {
-            const timestamp = msg.timestamp instanceof Date 
-              ? msg.timestamp 
+            const timestamp = msg.timestamp instanceof Date
+              ? msg.timestamp
               : new Date(msg.timestamp);
-            
+
             console.log(`[IndexedDB] 消息 ${index + 1}: ${msg.type}, ID=${msg.id}, 内容长度=${msg.content?.length || 0}`);
-            
+
             return {
               id: msg.id,
               type: msg.type,
@@ -455,10 +455,10 @@ export default function HomePage() {
               queryAnalysis: msg.queryAnalysis || null
             };
           });
-          
+
           setMessages(restoredMessages);
           console.log(`[IndexedDB] 已恢复 ${restoredMessages.length} 条消息到界面`);
-          
+
           // 恢复最后一条助手消息的检索详情
           const lastAssistantMessage = restoredMessages
             .filter(m => m.type === 'assistant' && m.retrievalDetails)
@@ -467,7 +467,7 @@ export default function HomePage() {
             setRetrievalDetails(lastAssistantMessage.retrievalDetails);
             console.log('[IndexedDB] 已恢复检索详情');
           }
-          
+
           // 恢复最后一条用户消息的查询分析
           const lastUserMessage = restoredMessages
             .filter(m => m.type === 'user' && m.queryAnalysis)
@@ -480,7 +480,7 @@ export default function HomePage() {
             }
             console.log('[IndexedDB] 已恢复查询分析数据');
           }
-          
+
           showToast(`已恢复 ${restoredMessages.length} 条历史消息`, 'success');
         } else {
           console.warn('[IndexedDB] 对话存在但没有消息');
@@ -509,7 +509,7 @@ export default function HomePage() {
   // 一键删除所有对话
   const handleDeleteAllConversations = async () => {
     if (!confirm('确定要删除所有对话记录吗？此操作不可恢复！')) return;
-    
+
     try {
       await dbManager.init();
       await dbManager.deleteAllConversations();
@@ -534,9 +534,9 @@ export default function HomePage() {
       tokens.push({
         token: char,
         tokenId: Math.floor(Math.random() * 5000) + 1000,
-        type: /[\u4e00-\u9fff]/.test(char) ? 'chinese' : 
-              /[a-zA-Z]/.test(char) ? 'english' :
-              /[0-9]/.test(char) ? 'number' : 
+        type: /[\u4e00-\u9fff]/.test(char) ? 'chinese' :
+          /[a-zA-Z]/.test(char) ? 'english' :
+            /[0-9]/.test(char) ? 'number' :
               /[.,!?:;()]/.test(char) ? 'punctuation' : 'special'
       });
     }
@@ -561,7 +561,7 @@ export default function HomePage() {
     setIsLoading(true);
     setShowQueryAnalysis(false);
     setShowQueryProcessing(true);
-    
+
     await saveMessageToDB({
       id: userMessageId,
       type: 'user',
@@ -612,8 +612,8 @@ export default function HomePage() {
                 context: input.includes('智能') ? '人工智能语境' : '通用语境',
                 semanticCategory: input.includes('智能') ? 'AI技术' : '一般',
                 confidence: 0.85,
-                nearestConcepts: input.includes('智能') 
-                  ? ['人工智能', '机器学习', '深度学习'] 
+                nearestConcepts: input.includes('智能')
+                  ? ['人工智能', '机器学习', '深度学习']
                   : ['文本', '信息', '内容'],
                 vectorFeatures: {
                   techScore: 0.7,
@@ -633,13 +633,13 @@ export default function HomePage() {
             vectorMagnitude: 1.2
           });
         }
-        
-        setMessages(prev => prev.map(msg => 
-          msg.id === userMessageId 
+
+        setMessages(prev => prev.map(msg =>
+          msg.id === userMessageId
             ? { ...msg, queryAnalysis: queryAnalysisData }
             : msg
         ));
-        
+
         if (currentConversationId) {
           try {
             await dbManager.init();
@@ -656,7 +656,7 @@ export default function HomePage() {
             console.error('更新用户消息分析数据失败:', error);
           }
         }
-        
+
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           type: 'assistant',
@@ -669,11 +669,11 @@ export default function HomePage() {
         setMessages(prev => [...prev, assistantMessage]);
         setShowQueryAnalysis(true);
         setQueryAnalysis(queryAnalysisData);
-        
+
         if (data.retrievalDetails) {
           setRetrievalDetails(data.retrievalDetails);
         }
-        
+
         await saveMessageToDB({
           id: assistantMessage.id,
           type: 'assistant',
@@ -712,7 +712,7 @@ export default function HomePage() {
   // 雷达图配置
   const getRadarChartOption = () => {
     if (!radarChartData) return null;
-    
+
     return {
       title: {
         text: '向量特征分析',
@@ -773,26 +773,24 @@ export default function HomePage() {
                 <i className="fas fa-brain text-blue-600 text-xl mr-2"></i>
                 <h1 className="text-lg font-semibold text-gray-900">RAG 知识库</h1>
               </div>
-              
+
               {/* 存储后端切换 - 更紧凑 */}
               <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
                 <button
                   onClick={() => handleStorageBackendChange('memory')}
-                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
-                    storageBackend === 'memory'
-                      ? 'bg-white text-blue-600 shadow-sm'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${storageBackend === 'memory'
+                    ? 'bg-white text-blue-600 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                    }`}
                 >
                   内存
                 </button>
                 <button
                   onClick={() => handleStorageBackendChange('milvus')}
-                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1 ${
-                    storageBackend === 'milvus'
-                      ? 'bg-white text-purple-600 shadow-sm'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1 ${storageBackend === 'milvus'
+                    ? 'bg-white text-purple-600 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                    }`}
                 >
                   Milvus
                   <span className={`w-1.5 h-1.5 rounded-full ${milvusConnected ? 'bg-green-400' : 'bg-red-400'}`}></span>
@@ -845,7 +843,13 @@ export default function HomePage() {
       </nav>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-
+        {/* Milvus 查询可视化 - 当选择 Milvus 后端时显示 */}
+        {storageBackend === 'milvus' && (
+          <MilvusQueryVisualizer
+            embeddingModel={embeddingModel}
+            defaultExpanded={false}
+          />
+        )}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* 主聊天区域 */}
           <div className="lg:col-span-2">
@@ -855,7 +859,7 @@ export default function HomePage() {
                 <h2 className="text-lg font-medium text-gray-900">智能问答</h2>
                 <p className="text-sm text-gray-500 mt-1">向知识库提问，获得基于文档的准确回答</p>
               </div>
-              
+
               {/* 聊天消息区域 */}
               <div className="h-96 overflow-y-auto p-6 space-y-4">
                 {messages.length === 0 ? (
@@ -873,7 +877,7 @@ export default function HomePage() {
                     />
                   ))
                 )}
-                
+
                 {isLoading && (
                   <div className="flex justify-start">
                     <div className="bg-gray-100 rounded-lg px-4 py-2">
@@ -885,7 +889,7 @@ export default function HomePage() {
                   </div>
                 )}
               </div>
-              
+
               {/* 输入区域 */}
               <div className="border-t p-6">
                 <ParameterControls
@@ -900,13 +904,13 @@ export default function HomePage() {
                   showParams={showParams}
                   onToggle={() => setShowParams(!showParams)}
                 />
-                
+
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div className="space-y-3">
                     <div className="flex space-x-4">
                       <div className="flex-1">
-                        <input 
-                          type="text" 
+                        <input
+                          type="text"
                           value={input}
                           onChange={(e) => setInput(e.target.value)}
                           placeholder="请输入您的问题..."
@@ -918,17 +922,16 @@ export default function HomePage() {
                       <button
                         type="button"
                         onClick={() => setShowIntentDistillation(!showIntentDistillation)}
-                        className={`px-4 py-2 rounded-lg transition-colors ${
-                          showIntentDistillation 
-                            ? 'bg-purple-600 text-white' 
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                        }`}
+                        className={`px-4 py-2 rounded-lg transition-colors ${showIntentDistillation
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
                         title="意图蒸馏"
                       >
                         <i className="fas fa-brain mr-2"></i>
                         🧠
                       </button>
-                      <button 
+                      <button
                         type="submit"
                         disabled={isLoading || !input.trim()}
                         className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -937,7 +940,7 @@ export default function HomePage() {
                         发送
                       </button>
                     </div>
-                    
+
                     {/* 意图蒸馏面板 */}
                     {showIntentDistillation && input.trim() && (
                       <div className="bg-gradient-to-br from-purple-50 to-blue-50 border-2 border-purple-200 rounded-xl p-4">
@@ -953,8 +956,8 @@ export default function HomePage() {
                             ✕
                           </button>
                         </div>
-                        <IntentDistillationPanel 
-                          query={input} 
+                        <IntentDistillationPanel
+                          query={input}
                           onQuerySelect={(query) => {
                             setInput(query);
                             setShowIntentDistillation(false);
@@ -963,7 +966,7 @@ export default function HomePage() {
                       </div>
                     )}
                   </div>
-                  
+
                   {/* 用户问题处理结果展示 */}
                   <div className="space-y-4">
                     <QuestionSelector
@@ -971,7 +974,7 @@ export default function HomePage() {
                       viewingAnalysisFor={viewingAnalysisFor}
                       onSelect={setViewingAnalysisFor}
                     />
-                    
+
                     {/* 显示选中的问题分析 */}
                     {viewingAnalysisFor && messages.find(m => m.id === viewingAnalysisFor)?.queryAnalysis && (
                       <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
@@ -991,7 +994,7 @@ export default function HomePage() {
                         />
                       </div>
                     )}
-                    
+
                     {/* 显示当前查询的分析（如果没有选中历史问题） */}
                     {!viewingAnalysisFor && showQueryAnalysis && queryAnalysis && (
                       <div className="bg-blue-50 rounded-lg p-4 border border-blue-200">
@@ -1016,28 +1019,21 @@ export default function HomePage() {
 
           {/* 侧边栏 */}
           <div className="space-y-4">
-            {/* Milvus 查询可视化 - 当选择 Milvus 后端时显示 */}
-            {storageBackend === 'milvus' && (
-              <MilvusQueryVisualizer
-                embeddingModel={embeddingModel}
-                defaultExpanded={false}
-              />
-            )}
-            
+
             <FileUpload
               selectedFiles={selectedFiles}
               isUploading={isUploading}
               onFileSelect={setSelectedFiles}
               onUpload={handleFileUpload}
             />
-            
+
             <FileList
               files={files}
               onRefresh={loadFilesList}
               onDelete={handleDeleteFile}
               formatFileSize={formatFileSize}
             />
-            
+
             <RealtimeMonitoring
               showVectorization={showVectorization}
               vectorizationDetails={vectorizationDetails}
@@ -1049,13 +1045,13 @@ export default function HomePage() {
               queryAnalysis={queryAnalysis}
               retrievalDetails={retrievalDetails}
             />
-            
+
             {/* 检索详情面板 */}
             <RetrievalDetailsPanel
               retrievalDetails={retrievalDetails}
               queryText={currentQuery}
             />
-            
+
             <SystemInfo
               docCount={storageBackend === 'milvus' ? (milvusStats?.rowCount || 0) : docCount}
               embeddingDim={storageBackend === 'milvus' ? (milvusStats?.embeddingDimension || 0) : embeddingDim}

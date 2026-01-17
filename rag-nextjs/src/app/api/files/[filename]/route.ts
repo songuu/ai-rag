@@ -8,10 +8,10 @@ const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
 // DELETE /api/files/[filename] - 删除文件
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { filename: string } }
+  { params }: { params: Promise<{ filename: string }> }
 ) {
   try {
-    const { filename } = params;
+    const { filename } = await params;
     const decodedFilename = decodeURIComponent(filename);
     
     // 安全验证：确保文件名不包含路径遍历字符

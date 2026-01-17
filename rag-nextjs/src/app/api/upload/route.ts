@@ -2,8 +2,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, mkdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
+import { 
+  parseDocument, 
+  isSupportedFile, 
+  getSupportedTypesDescription,
+  SUPPORTED_EXTENSIONS 
+} from '@/lib/document-parser';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,36 +35,63 @@ export async function POST(request: NextRequest) {
     for (const file of files) {
       try {
         // 验证文件类型
-        if (!file.name.endsWith('.txt')) {
+        if (!isSupportedFile(file.name)) {
           errors.push({
             filename: file.name,
-            error: '只支持 .txt 文本文件'
+            error: `不支持的文件类型。${getSupportedTypesDescription()}`
           });
           continue;
         }
 
-        // 验证文件大小 (5MB)
-        if (file.size > 5 * 1024 * 1024) {
+        // 验证文件大小
+        if (file.size > MAX_FILE_SIZE) {
           errors.push({
             filename: file.name,
-            error: '文件太大，最大支持 5MB'
+            error: `文件太大，最大支持 ${MAX_FILE_SIZE / 1024 / 1024}MB`
           });
           continue;
         }
 
-        // 保存文件
+        // 读取文件内容
         const bytes = await file.arrayBuffer();
         const buffer = Buffer.from(bytes);
-        const filePath = path.join(UPLOAD_DIR, file.name);
         
-        await writeFile(filePath, buffer);
+        // 解析文档内容
+        const parseResult = await parseDocument(buffer, file.name);
+        
+        if (!parseResult.success || !parseResult.document) {
+          errors.push({
+            filename: file.name,
+            error: parseResult.error || '文件解析失败'
+          });
+          continue;
+        }
+
+        // 生成安全的文件名（处理原始文件）
+        const timestamp = Date.now();
+        const safeFilename = `${timestamp}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+        const originalFilePath = path.join(UPLOAD_DIR, safeFilename);
+        
+        // 保存原始文件
+        await writeFile(originalFilePath, buffer);
+        
+        // 同时保存解析后的文本内容（.txt 格式）
+        const textFilename = `${timestamp}_${path.basename(file.name, path.extname(file.name))}_parsed.txt`;
+        const textFilePath = path.join(UPLOAD_DIR, textFilename);
+        await writeFile(textFilePath, parseResult.document.content, 'utf-8');
 
         results.push({
           filename: file.name,
+          savedAs: safeFilename,
+          textFile: textFilename,
           size: file.size,
-          path: filePath
+          contentLength: parseResult.document.content.length,
+          metadata: parseResult.document.metadata,
+          path: originalFilePath
         });
+
       } catch (error) {
+        console.error(`处理文件 ${file.name} 时出错:`, error);
         errors.push({
           filename: file.name,
           error: error instanceof Error ? error.message : '上传失败'
@@ -69,7 +103,8 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `成功上传 ${results.length} 个文件`,
       results,
-      errors: errors.length > 0 ? errors : undefined
+      errors: errors.length > 0 ? errors : undefined,
+      supportedTypes: SUPPORTED_EXTENSIONS
     });
 
   } catch (error) {
@@ -82,4 +117,14 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+// GET 端点返回支持的文件类型
+export async function GET() {
+  return NextResponse.json({
+    supportedExtensions: SUPPORTED_EXTENSIONS,
+    description: getSupportedTypesDescription(),
+    maxSize: MAX_FILE_SIZE,
+    maxSizeFormatted: `${MAX_FILE_SIZE / 1024 / 1024}MB`
+  });
 }
