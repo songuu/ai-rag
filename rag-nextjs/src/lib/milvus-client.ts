@@ -679,4 +679,78 @@ export async function resetMilvusInstance(): Promise<void> {
   }
 }
 
+// Embedding 模型维度映射
+const MODEL_DIMENSIONS: Record<string, number> = {
+  'nomic-embed-text': 768,
+  'nomic-embed-text-v2-moe': 768,
+  'mxbai-embed-large': 1024,
+  'bge-large': 1024,
+  'bge-m3': 1024,
+  'snowflake-arctic-embed': 1024,
+  'e5-large': 1024,
+  'gte-large': 1024,
+  'all-minilm': 384,
+  'paraphrase-multilingual': 768,
+};
+
+/**
+ * 获取模型的向量维度
+ */
+export function getModelDimension(modelName: string): number {
+  // 移除 :latest 后缀
+  const baseName = modelName.split(':')[0].toLowerCase();
+  
+  console.log(`[getModelDimension] Input: "${modelName}", BaseName: "${baseName}"`);
+  
+  // 精确匹配
+  if (MODEL_DIMENSIONS[baseName]) {
+    console.log(`[getModelDimension] Exact match: ${baseName} → ${MODEL_DIMENSIONS[baseName]}D`);
+    return MODEL_DIMENSIONS[baseName];
+  }
+  
+  // 部分匹配
+  for (const [key, dim] of Object.entries(MODEL_DIMENSIONS)) {
+    if (baseName.includes(key) || key.includes(baseName)) {
+      console.log(`[getModelDimension] Partial match: ${key} → ${dim}D`);
+      return dim;
+    }
+  }
+  
+  // 默认维度
+  console.log(`[getModelDimension] No match, using default: 768D`);
+  return 768;
+}
+
+/**
+ * 根据维度选择合适的 embedding 模型
+ */
+export function selectModelByDimension(dimension: number): string {
+  console.log(`[selectModelByDimension] Looking for model with dimension: ${dimension}D`);
+  
+  // 按维度分组的模型列表（优先使用的模型在前）
+  const modelsByDimension: Record<number, string[]> = {
+    384: ['all-minilm'],
+    768: ['nomic-embed-text', 'nomic-embed-text-v2-moe', 'paraphrase-multilingual'],
+    1024: ['bge-m3', 'bge-large', 'mxbai-embed-large', 'snowflake-arctic-embed', 'e5-large', 'gte-large'],
+  };
+  
+  const candidates = modelsByDimension[dimension];
+  
+  if (candidates && candidates.length > 0) {
+    const selected = candidates[0];
+    console.log(`[selectModelByDimension] Selected: ${selected} (${dimension}D)`);
+    return selected;
+  }
+  
+  // 如果没有精确匹配，选择最接近的
+  const availableDimensions = Object.keys(modelsByDimension).map(Number);
+  const closest = availableDimensions.reduce((prev, curr) =>
+    Math.abs(curr - dimension) < Math.abs(prev - dimension) ? curr : prev
+  );
+  
+  const fallback = modelsByDimension[closest][0];
+  console.log(`[selectModelByDimension] No exact match, using closest: ${fallback} (${closest}D)`);
+  return fallback;
+}
+
 export default MilvusVectorStore;

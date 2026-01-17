@@ -425,8 +425,12 @@ export default function ChatMessage({ message, currentQuery, highlightMatchingTe
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
                   <span>检索到 {searchResults.length} 个相关文档</span>
-                  <span className="text-gray-400">·</span>
-                  <span className="text-gray-400">{message.retrievalDetails.searchTime}ms</span>
+                  {message.retrievalDetails.searchTime > 0 && (
+                    <>
+                      <span className="text-gray-400">·</span>
+                      <span className="text-gray-400">{message.retrievalDetails.searchTime}ms</span>
+                    </>
+                  )}
                 </div>
                 <svg 
                   className={`w-4 h-4 transition-transform ${showDetails ? 'rotate-180' : ''}`}
@@ -443,11 +447,11 @@ export default function ChatMessage({ message, currentQuery, highlightMatchingTe
                 <div className="px-4 pb-3 space-y-2">
                   {/* 检索统计 */}
                   <div className="flex gap-3 text-xs text-gray-500 pb-2 border-b border-gray-100">
-                    <span>总文档: {message.retrievalDetails.totalDocuments}</span>
+                    <span>总文档: {message.retrievalDetails.totalDocuments || searchResults.length}</span>
                     <span>·</span>
-                    <span>阈值: {(message.retrievalDetails.threshold * 100).toFixed(0)}%</span>
+                    <span>阈值: {message.retrievalDetails.threshold != null ? (message.retrievalDetails.threshold * 100).toFixed(0) + '%' : '-'}</span>
                     <span>·</span>
-                    <span>Top-{message.retrievalDetails.topK}</span>
+                    <span>Top-{message.retrievalDetails.topK || searchResults.length}</span>
                   </div>
                   
                   {/* 检索结果列表 */}

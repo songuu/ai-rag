@@ -3,6 +3,7 @@ import { getRagSystem } from '@/lib/rag-instance';
 import { analyzeQuery } from '@/lib/semantic-analyzer';
 import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
 import { OllamaEmbeddings } from '@langchain/ollama';
+import { AgenticRAGSystem } from '@/lib/agentic-rag';
 
 const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
 const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
@@ -36,7 +37,9 @@ export async function POST(request: NextRequest) {
       embeddingModel = 'nomic-embed-text',
       userId,
       sessionId,
-      storageBackend = 'memory' // 新增: 存储后端选择
+      storageBackend = 'memory', // 存储后端选择
+      useAgenticRAG = false,     // 是否使用 Agentic RAG 模式
+      maxRetries = 2,            // Agentic RAG 最大重试次数
     } = body;
 
     if (!question || typeof question !== "string") {
@@ -46,7 +49,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[Ask API] 使用模型 - LLM: ${llmModel}, Embedding: ${embeddingModel}, 后端: ${storageBackend}`);
+    console.log(`[Ask API] 使用模型 - LLM: ${llmModel}, Embedding: ${embeddingModel}, 后端: ${storageBackend}, Agentic: ${useAgenticRAG}`);
+
+    // 使用 Agentic RAG 模式
+    if (useAgenticRAG && storageBackend === 'milvus') {
+      return await handleAgenticQuery(question, {
+        topK: parseInt(topK),
+        similarityThreshold: parseFloat(similarityThreshold),
+        llmModel,
+        embeddingModel,
+        maxRetries: parseInt(maxRetries),
+      });
+    }
 
     // 根据存储后端选择不同的检索方式
     if (storageBackend === 'milvus') {
@@ -230,6 +244,102 @@ ${context}
         success: false,
         error: 'Milvus 查询失败',
         details: error instanceof Error ? error.message : String(error)
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// Agentic RAG 查询处理
+async function handleAgenticQuery(
+  question: string,
+  options: {
+    topK: number;
+    similarityThreshold: number;
+    llmModel: string;
+    embeddingModel: string;
+    maxRetries: number;
+  }
+) {
+  const { topK, similarityThreshold, llmModel, embeddingModel, maxRetries } = options;
+
+  try {
+    const agenticRAG = new AgenticRAGSystem({
+      ollamaBaseUrl: OLLAMA_BASE_URL,
+      llmModel,
+      embeddingModel,
+      milvusConfig: {
+        address: MILVUS_ADDRESS,
+        collectionName: MILVUS_COLLECTION,
+      },
+      enableHallucinationCheck: true,
+      enableSelfReflection: true,
+    });
+
+    const result = await agenticRAG.query(question, {
+      topK,
+      similarityThreshold,
+      maxRetries,
+    });
+
+    return NextResponse.json({
+      success: !result.error,
+      question,
+      answer: result.answer,
+      models: {
+        llm: llmModel,
+        embedding: embeddingModel,
+      },
+      storageBackend: 'milvus',
+      agenticMode: true,
+      
+      // 工作流信息
+      workflow: {
+        steps: result.workflowSteps,
+        totalDuration: result.totalDuration,
+        retryCount: result.retryCount,
+      },
+      
+      // 查询分析
+      queryAnalysis: result.queryAnalysis,
+      
+      // 检索详情
+      retrievalDetails: {
+        searchResults: result.retrievedDocuments.map((doc, i) => ({
+          document: {
+            content: doc.content,
+            metadata: doc.metadata,
+          },
+          similarity: doc.score,
+          relevanceScore: doc.relevanceScore,
+          factualScore: doc.factualScore,
+          index: i,
+        })),
+        quality: result.retrievalQuality,
+        selfReflection: result.selfReflection,
+        totalDocuments: result.retrievedDocuments.length,
+        // 添加标准字段以兼容前端显示
+        threshold: similarityThreshold,
+        topK: topK,
+        searchTime: result.workflowSteps?.find((s: any) => s.step === '文档检索')?.duration || 0,
+      },
+      
+      // 幻觉检查
+      hallucinationCheck: result.hallucinationCheck,
+      
+      context: result.context,
+      traceId: `agentic-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      error: result.error,
+    });
+
+  } catch (error) {
+    console.error('[Agentic RAG Error]:', error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: 'Agentic RAG 查询失败',
+        details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
     );

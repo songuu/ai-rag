@@ -16,6 +16,8 @@ import SystemInfo from '@/components/SystemInfo';
 import Toast from '@/components/Toast';
 import IntentDistillationPanel from '@/components/IntentDistillationPanel';
 import MilvusQueryVisualizer from '@/components/MilvusQueryVisualizer';
+import AgenticWorkflowPanel from '@/components/AgenticWorkflowPanel';
+import LangSmithTraceViewer from '@/components/LangSmithTraceViewer';
 
 interface Message {
   id: string;
@@ -74,6 +76,17 @@ export default function HomePage() {
   const [storageBackend, setStorageBackend] = useState<'memory' | 'milvus'>('memory');
   const [milvusConnected, setMilvusConnected] = useState(false);
   const [milvusStats, setMilvusStats] = useState<any>(null);
+
+  // Agentic RAG 相关状态
+  const [useAgenticRAG, setUseAgenticRAG] = useState(false);
+  const [agenticWorkflow, setAgenticWorkflow] = useState<any>(null);
+  const [agenticQueryAnalysis, setAgenticQueryAnalysis] = useState<any>(null);
+  const [agenticRetrievalQuality, setAgenticRetrievalQuality] = useState<any>(null);
+  const [agenticSelfReflection, setAgenticSelfReflection] = useState<any>(null);
+  const [agenticHallucinationCheck, setAgenticHallucinationCheck] = useState<any>(null);
+  const [agenticRetrievalGrade, setAgenticRetrievalGrade] = useState<any>(null);
+  const [agenticDebugInfo, setAgenticDebugInfo] = useState<any>(null);
+  const [showAgenticPanel, setShowAgenticPanel] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
 
@@ -570,6 +583,18 @@ export default function HomePage() {
     });
 
     try {
+      // 清空之前的 Agentic RAG 状态
+      if (useAgenticRAG) {
+        setAgenticWorkflow(null);
+        setAgenticQueryAnalysis(null);
+        setAgenticRetrievalQuality(null);
+        setAgenticSelfReflection(null);
+        setAgenticHallucinationCheck(null);
+        setAgenticRetrievalGrade(null);
+        setAgenticDebugInfo(null);
+        setShowAgenticPanel(true);
+      }
+
       const response = await fetch('/api/ask', {
         method: 'POST',
         headers: {
@@ -583,7 +608,9 @@ export default function HomePage() {
           embeddingModel,
           userId: 'demo-user',
           sessionId: 'demo-session',
-          storageBackend, // 添加存储后端参数
+          storageBackend,
+          useAgenticRAG: useAgenticRAG && storageBackend === 'milvus', // 只有 Milvus 后端支持 Agentic RAG
+          maxRetries: 2,
         }),
       });
 
@@ -591,14 +618,82 @@ export default function HomePage() {
 
       console.log('data', data);
 
+      // 处理 Agentic RAG 响应
+      if (data.agenticMode) {
+        setAgenticWorkflow(data.workflow);
+        setAgenticQueryAnalysis(data.queryAnalysis);
+        setAgenticRetrievalQuality(data.retrievalDetails?.quality);
+        setAgenticSelfReflection(data.retrievalDetails?.selfReflection);
+        setAgenticHallucinationCheck(data.hallucinationCheck);
+        setAgenticRetrievalGrade(data.retrievalGrade);
+        setAgenticDebugInfo(data.debugInfo);
+      }
+
       if (data.success) {
         let queryAnalysisData: any;
-        if (data.queryAnalysis) {
+        
+        // 处理 Agentic RAG 模式的查询分析数据
+        if (data.agenticMode && data.queryAnalysis) {
+          // 将 Agentic RAG 的查询分析转换为标准格式
+          const agenticAnalysis = data.queryAnalysis;
+          // 重要：始终使用用户原始输入，防止 LLM 返回错误的 originalQuery
+          const userOriginalInput = input.trim();
+          queryAnalysisData = {
+            tokenization: {
+              tokenCount: agenticAnalysis.keywords?.length || Math.floor(userOriginalInput.length / 2),
+              tokens: agenticAnalysis.keywords?.map((kw: string, i: number) => ({
+                token: kw,
+                tokenId: 1000 + i,
+                type: /[\u4e00-\u9fff]/.test(kw) ? 'chinese' : 'english'
+              })) || generateMockTokens(userOriginalInput),
+              processingTime: data.workflow?.steps?.find((s: any) => s.step === '查询分析与优化')?.duration || 0,
+              // 始终使用用户原始输入，不信任 API 返回的 originalQuery（可能被 LLM 错误修改）
+              originalText: userOriginalInput
+            },
+            embedding: {
+              embeddingDimension: data.retrievalDetails?.searchResults?.[0]?.document?.metadata?.dimension || 768,
+              semanticAnalysis: {
+                context: agenticAnalysis.intent === 'factual' ? '事实查询语境' :
+                         agenticAnalysis.intent === 'exploratory' ? '探索性语境' :
+                         agenticAnalysis.intent === 'comparison' ? '比较分析语境' :
+                         agenticAnalysis.intent === 'procedural' ? '操作指导语境' : '通用语境',
+                semanticCategory: agenticAnalysis.intent || '一般',
+                confidence: agenticAnalysis.confidence || 0.8,
+                nearestConcepts: agenticAnalysis.keywords || [],
+                vectorFeatures: {
+                  techScore: agenticAnalysis.intent === 'factual' ? 0.7 : 0.4,
+                  businessScore: 0.3,
+                  dailyScore: agenticAnalysis.complexity === 'simple' ? 0.6 : 0.3,
+                  emotionScore: 0.1,
+                  vectorMagnitude: 1.2
+                }
+              }
+            },
+            // 保留原始 Agentic 分析数据
+            agenticAnalysis: {
+              originalQuery: agenticAnalysis.originalQuery,
+              rewrittenQuery: agenticAnalysis.rewrittenQuery,
+              intent: agenticAnalysis.intent,
+              complexity: agenticAnalysis.complexity,
+              needsRetrieval: agenticAnalysis.needsRetrieval,
+              keywords: agenticAnalysis.keywords
+            }
+          };
+          setRadarChartData({
+            techScore: agenticAnalysis.intent === 'factual' ? 0.7 : 0.4,
+            businessScore: 0.3,
+            dailyScore: agenticAnalysis.complexity === 'simple' ? 0.6 : 0.3,
+            emotionScore: 0.1,
+            vectorMagnitude: 1.2
+          });
+        } else if (data.queryAnalysis) {
+          // 普通模式的查询分析
           queryAnalysisData = data.queryAnalysis;
           if (data.queryAnalysis.embedding?.semanticAnalysis?.vectorFeatures) {
             setRadarChartData(data.queryAnalysis.embedding.semanticAnalysis.vectorFeatures);
           }
         } else {
+          // 默认数据
           queryAnalysisData = {
             tokenization: {
               tokenCount: Math.floor(input.trim().length / 2),
@@ -796,6 +891,30 @@ export default function HomePage() {
                   <span className={`w-1.5 h-1.5 rounded-full ${milvusConnected ? 'bg-green-400' : 'bg-red-400'}`}></span>
                 </button>
               </div>
+
+              {/* Agentic RAG 开关 - 仅在 Milvus 模式下显示 */}
+              {storageBackend === 'milvus' && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setUseAgenticRAG(!useAgenticRAG);
+                      if (!useAgenticRAG) {
+                        setShowAgenticPanel(true);
+                      }
+                    }}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                      useAgenticRAG
+                        ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-500 hover:text-gray-700'
+                    }`}
+                    title="启用 Agentic RAG 代理化工作流"
+                  >
+                    <i className="fas fa-robot"></i>
+                    Agent
+                    {useAgenticRAG && <i className="fas fa-check text-xs"></i>}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* 中间: 导航链接 - 图标为主 */}
@@ -814,6 +933,9 @@ export default function HomePage() {
               </Link>
               <Link href="/self-rag" className="p-2 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors" title="Self-RAG">
                 <i className="fas fa-sync-alt"></i>
+              </Link>
+              <Link href="/agentic-rag" className="p-2 text-fuchsia-500 hover:text-fuchsia-700 hover:bg-fuchsia-50 rounded-lg transition-colors" title="Agentic RAG">
+                <i className="fas fa-robot"></i>
               </Link>
               <Link href="/milvus" className="p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors" title="Milvus">
                 <i className="fas fa-database"></i>
@@ -844,12 +966,41 @@ export default function HomePage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Milvus 查询可视化 - 当选择 Milvus 后端时显示 */}
-        {storageBackend === 'milvus' && (
+        {storageBackend === 'milvus' && !useAgenticRAG && (
           <MilvusQueryVisualizer
             embeddingModel={embeddingModel}
             defaultExpanded={false}
           />
         )}
+
+        {/* Agentic RAG 工作流面板 - 当启用 Agentic RAG 时显示 */}
+        {storageBackend === 'milvus' && useAgenticRAG && showAgenticPanel && (
+          <div className="mb-6 space-y-4">
+            <AgenticWorkflowPanel
+              workflow={agenticWorkflow}
+              queryAnalysis={agenticQueryAnalysis}
+              retrievalQuality={agenticRetrievalQuality}
+              selfReflection={agenticSelfReflection}
+              hallucinationCheck={agenticHallucinationCheck}
+              isLoading={isLoading}
+              className="shadow-lg"
+            />
+            
+            {/* LangSmith 追踪可视化 */}
+            {agenticWorkflow?.steps && agenticWorkflow.steps.length > 0 && (
+              <LangSmithTraceViewer
+                workflowSteps={agenticWorkflow.steps}
+                queryAnalysis={agenticQueryAnalysis}
+                retrievalGrade={agenticRetrievalGrade}
+                debugInfo={agenticDebugInfo}
+                totalDuration={agenticWorkflow.totalDuration}
+                defaultExpanded={false}
+                className="shadow-lg"
+              />
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* 主聊天区域 */}
           <div className="lg:col-span-2">
