@@ -400,8 +400,13 @@ export default function ChatMessage({ message, currentQuery, highlightMatchingTe
             }`}>
               <span>{message.timestamp.toLocaleTimeString()}</span>
               {message.traceId && (
-                <span className="font-mono">
-                  #{message.traceId.slice(0, 8)}
+                <span className="flex items-center gap-1.5 font-mono">
+                  {message.traceId.startsWith('milvus') && (
+                    <span className="px-1.5 py-0.5 bg-purple-100 text-purple-600 rounded text-[10px] font-medium">
+                      Milvus
+                    </span>
+                  )}
+                  <span className="text-gray-400">#{message.traceId.split('-').pop()?.slice(0, 6) || message.traceId.slice(0, 8)}</span>
                 </span>
               )}
             </div>

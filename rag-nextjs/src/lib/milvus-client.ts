@@ -72,6 +72,13 @@ export class MilvusVectorStore {
   }
 
   /**
+   * 获取当前配置
+   */
+  getConfig(): Required<MilvusConfig> {
+    return { ...this.config };
+  }
+
+  /**
    * 连接到 Milvus 服务
    */
   async connect(): Promise<void> {
@@ -353,8 +360,19 @@ export class MilvusVectorStore {
 
     console.log(`[Milvus] Inserted ${result.insert_cnt} documents`);
     
-    // 刷新数据
+    // 刷新数据确保持久化
+    console.log(`[Milvus] Flushing data...`);
     await client.flushSync({ collection_names: [collectionName] });
+    
+    // 重新加载集合以确保新数据可被搜索
+    console.log(`[Milvus] Reloading collection to make new data searchable...`);
+    try {
+      await client.releaseCollection({ collection_name: collectionName });
+      await client.loadCollection({ collection_name: collectionName });
+      console.log(`[Milvus] Collection reloaded successfully`);
+    } catch (reloadError) {
+      console.warn(`[Milvus] Reload warning (may be OK):`, reloadError);
+    }
 
     // 返回所有文档的 ID
     return data.map(d => d.id);
@@ -406,6 +424,10 @@ export class MilvusVectorStore {
 
     const results = await client.search(searchReq);
 
+    console.log('[Milvus] Search response status:', results.status);
+    console.log('[Milvus] Search results type:', typeof results.results, Array.isArray(results.results));
+    console.log('[Milvus] Search results length:', results.results?.length);
+
     if (results.status.error_code !== 'Success') {
       throw new Error(`Search failed: ${results.status.reason}`);
     }
@@ -413,9 +435,28 @@ export class MilvusVectorStore {
     // 转换结果
     const searchResults: MilvusSearchResult[] = [];
     
-    // 确保 results.results 是数组
-    const hits = Array.isArray(results.results) ? results.results[0] : results.results;
-    if (!hits || !Array.isArray(hits)) {
+    // Milvus SDK 2.x 返回的 results.results 直接是数组
+    // 但如果是多向量查询，可能是嵌套数组
+    let hits: any[] = [];
+    
+    if (Array.isArray(results.results)) {
+      if (results.results.length > 0) {
+        // 检查是否是嵌套数组（多向量查询）
+        if (Array.isArray(results.results[0])) {
+          hits = results.results[0];
+        } else {
+          // 单向量查询，直接使用
+          hits = results.results;
+        }
+      }
+    }
+    
+    console.log('[Milvus] Parsed hits count:', hits.length);
+    if (hits.length > 0) {
+      console.log('[Milvus] First hit sample:', JSON.stringify(hits[0]).substring(0, 200));
+    }
+    
+    if (hits.length === 0) {
       console.warn('[Milvus] No search results returned');
       return [];
     }
@@ -518,11 +559,29 @@ export class MilvusVectorStore {
 
       const stats = await client.getCollectionStatistics({ collection_name: collectionName });
       const loadState = await client.getLoadState({ collection_name: collectionName });
+      
+      // 从集合 schema 获取实际的向量维度
+      let actualDimension = this.config.embeddingDimension;
+      try {
+        const collectionInfo = await client.describeCollection({ collection_name: collectionName });
+        const embeddingField = collectionInfo.schema?.fields?.find(
+          (f: any) => f.name === 'embedding' && f.type_params
+        );
+        if (embeddingField?.type_params) {
+          const dimParam = embeddingField.type_params.find((p: any) => p.key === 'dim');
+          if (dimParam?.value) {
+            actualDimension = parseInt(dimParam.value);
+            console.log(`[Milvus] Actual collection dimension from schema: ${actualDimension}D`);
+          }
+        }
+      } catch (schemaError) {
+        console.warn('[Milvus] Could not get schema dimension, using config:', schemaError);
+      }
 
       return {
         name: collectionName,
         rowCount: parseInt(stats.data.row_count || '0'),
-        embeddingDimension: this.config.embeddingDimension,
+        embeddingDimension: actualDimension,
         indexType: this.config.indexType,
         metricType: this.config.metricType,
         loaded: loadState.state === 'LoadStateLoaded',
@@ -589,11 +648,23 @@ export class MilvusVectorStore {
 let milvusInstance: MilvusVectorStore | null = null;
 
 /**
- * 获取 Milvus 实例（单例模式）
+ * 获取 Milvus 实例（单例模式，支持配置更新）
  */
 export function getMilvusInstance(config?: MilvusConfig): MilvusVectorStore {
   if (!milvusInstance) {
     milvusInstance = new MilvusVectorStore(config);
+    console.log('[Milvus] Created new instance with config:', config?.collectionName, config?.embeddingDimension);
+  } else if (config) {
+    // 检查关键配置是否变化，如果变化则重建实例
+    const currentConfig = milvusInstance.getConfig();
+    if (currentConfig.embeddingDimension !== config.embeddingDimension ||
+        currentConfig.collectionName !== config.collectionName) {
+      console.log('[Milvus] Config changed, recreating instance...');
+      console.log('[Milvus] Old:', currentConfig.embeddingDimension, 'New:', config.embeddingDimension);
+      // 断开旧连接
+      milvusInstance.disconnect().catch(() => {});
+      milvusInstance = new MilvusVectorStore(config);
+    }
   }
   return milvusInstance;
 }

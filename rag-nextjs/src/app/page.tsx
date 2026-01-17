@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { io, Socket } from 'socket.io-client';
 import { dbManager, type ConversationMessage } from '@/lib/indexeddb';
@@ -15,6 +15,7 @@ import RetrievalDetailsPanel from '@/components/RetrievalDetailsPanel';
 import SystemInfo from '@/components/SystemInfo';
 import Toast from '@/components/Toast';
 import IntentDistillationPanel from '@/components/IntentDistillationPanel';
+import MilvusQueryVisualizer from '@/components/MilvusQueryVisualizer';
 
 interface Message {
   id: string;
@@ -68,6 +69,11 @@ export default function HomePage() {
   const [retrievalDetails, setRetrievalDetails] = useState<any>(null);
   const [vectorizationDetails, setVectorizationDetails] = useState<any>(null);
   const [showIntentDistillation, setShowIntentDistillation] = useState(false);
+  
+  // Milvus 相关状态
+  const [storageBackend, setStorageBackend] = useState<'memory' | 'milvus'>('memory');
+  const [milvusConnected, setMilvusConnected] = useState(false);
+  const [milvusStats, setMilvusStats] = useState<any>(null);
   
   const socketRef = useRef<Socket | null>(null);
 
@@ -141,6 +147,54 @@ export default function HomePage() {
     }
   };
 
+  // 检查 Milvus 状态
+  const checkMilvusStatus = useCallback(async () => {
+    try {
+      const response = await fetch('/api/milvus?action=status');
+      const data = await response.json();
+      if (data.success) {
+        setMilvusConnected(data.connected);
+        setMilvusStats(data.stats);
+      } else {
+        setMilvusConnected(false);
+      }
+    } catch (error) {
+      setMilvusConnected(false);
+    }
+  }, []);
+
+  // 切换存储后端
+  const handleStorageBackendChange = async (backend: 'memory' | 'milvus') => {
+    if (backend === 'milvus' && !milvusConnected) {
+      showToast('Milvus 未连接，请先确保 Milvus 服务正常运行', 'warning');
+      return;
+    }
+    
+    setStorageBackend(backend);
+    showToast(`已切换到 ${backend === 'milvus' ? 'Milvus 向量数据库' : '内存存储'}`, 'success');
+    
+    if (backend === 'milvus') {
+      await checkMilvusStatus();
+      
+      // 检查是否需要同步
+      try {
+        const syncCheckRes = await fetch('/api/milvus/sync');
+        const syncCheck = await syncCheckRes.json();
+        
+        if (syncCheck.success && syncCheck.needsSync) {
+          // Milvus 为空但有可同步的数据
+          if (syncCheck.memory?.documentCount > 0) {
+            showToast(`检测到 ${syncCheck.memory.documentCount} 个内存文档，可在可视化面板中同步到 Milvus`, 'info');
+          } else if (syncCheck.uploads?.count > 0) {
+            showToast(`检测到 ${syncCheck.uploads.count} 个上传文件，可在可视化面板中同步到 Milvus`, 'info');
+          }
+        }
+      } catch (e) {
+        console.error('Sync check error:', e);
+      }
+    }
+  };
+
   // 加载文件列表
   const loadFilesList = async () => {
     try {
@@ -200,6 +254,30 @@ export default function HomePage() {
         setSelectedFiles([]);
         loadFilesList();
         checkSystemHealth();
+
+        // 如果当前是 Milvus 后端，自动同步到 Milvus
+        if (storageBackend === 'milvus' && milvusConnected) {
+          showToast('正在同步到 Milvus...', 'info');
+          try {
+            const syncResponse = await fetch('/api/milvus/sync', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                action: 'sync-from-uploads',
+                embeddingModel,
+              }),
+            });
+            const syncData = await syncResponse.json();
+            if (syncData.success) {
+              showToast(`已同步到 Milvus: ${syncData.totalChunks} 个文档块`, 'success');
+              checkMilvusStatus();
+            } else {
+              showToast(`Milvus 同步失败: ${syncData.error}`, 'warning');
+            }
+          } catch (syncError) {
+            showToast('Milvus 同步失败', 'warning');
+          }
+        }
       } else {
         showToast(data.error || '上传失败', 'error');
       }
@@ -504,7 +582,8 @@ export default function HomePage() {
           llmModel,
           embeddingModel,
           userId: 'demo-user',
-          sessionId: 'demo-session'
+          sessionId: 'demo-session',
+          storageBackend, // 添加存储后端参数
         }),
       });
 
@@ -627,7 +706,8 @@ export default function HomePage() {
     checkSystemHealth();
     loadFilesList();
     loadLatestConversation();
-  }, []);
+    checkMilvusStatus();
+  }, [checkMilvusStatus]);
 
   // 雷达图配置
   const getRadarChartOption = () => {
@@ -683,92 +763,90 @@ export default function HomePage() {
 
   return (
     <div className="bg-gray-50 min-h-screen">
-      {/* 导航栏 */}
+      {/* 导航栏 - 简洁设计 */}
       <nav className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between h-16">
-            <div className="flex items-center">
-              <i className="fas fa-brain text-blue-600 text-2xl mr-3"></i>
-              <h1 className="text-xl font-semibold text-gray-900">本地 RAG 知识库系统</h1>
-              <div className="ml-6 flex space-x-2">
-                <Link 
-                  href="/observability" 
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-blue-600 bg-blue-100 hover:bg-blue-200 transition-colors"
-                >
-                  <i className="fas fa-chart-line mr-2"></i>
-                  可观测性仪表盘
-                </Link>
-                <Link 
-                  href="/history" 
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-gray-600 bg-gray-100 hover:bg-gray-200 transition-colors"
-                >
-                  <i className="fas fa-history mr-2"></i>
-                  历史对话
-                </Link>
-                <Link 
-                  href="/trace-trie" 
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-purple-600 bg-purple-100 hover:bg-purple-200 transition-colors"
-                >
-                  <i className="fas fa-sitemap mr-2"></i>
-                  Trace-Trie 分析
-                </Link>
-                <Link
-                  href="/domain-vectors"
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-emerald-600 bg-emerald-100 hover:bg-emerald-200 transition-colors"
-                >
-                  <i className="fas fa-crosshairs mr-2"></i>
-                  领域向量
-                </Link>
-                <Link
-                  href="/self-rag"
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-indigo-600 bg-indigo-100 hover:bg-indigo-200 transition-colors"
-                >
-                  <i className="fas fa-sync-alt mr-2"></i>
-                  Self-RAG
-                </Link>
-                <Link
-                  href="/milvus"
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-purple-600 bg-purple-100 hover:bg-purple-200 transition-colors"
-                >
-                  <i className="fas fa-database mr-2"></i>
-                  Milvus
-                </Link>
+          <div className="flex justify-between h-14">
+            {/* 左侧: Logo + 存储切换 */}
+            <div className="flex items-center gap-6">
+              <div className="flex items-center">
+                <i className="fas fa-brain text-blue-600 text-xl mr-2"></i>
+                <h1 className="text-lg font-semibold text-gray-900">RAG 知识库</h1>
+              </div>
+              
+              {/* 存储后端切换 - 更紧凑 */}
+              <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
                 <button
-                  onClick={handleDeleteAllConversations}
-                  className="inline-flex items-center px-3 py-2 border border-transparent text-sm leading-4 font-medium rounded-md text-red-600 bg-red-100 hover:bg-red-200 transition-colors"
-                  title="删除所有对话"
+                  onClick={() => handleStorageBackendChange('memory')}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${
+                    storageBackend === 'memory'
+                      ? 'bg-white text-blue-600 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
                 >
-                  <i className="fas fa-trash-alt mr-2"></i>
-                  清空对话
+                  内存
+                </button>
+                <button
+                  onClick={() => handleStorageBackendChange('milvus')}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1 ${
+                    storageBackend === 'milvus'
+                      ? 'bg-white text-purple-600 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  Milvus
+                  <span className={`w-1.5 h-1.5 rounded-full ${milvusConnected ? 'bg-green-400' : 'bg-red-400'}`}></span>
                 </button>
               </div>
             </div>
-            <div className="flex items-center space-x-4">
-              <div className="flex items-center">
-                <div className={`w-3 h-3 rounded-full mr-2 ${systemStatus === '运行中' ? 'bg-green-400' : 'bg-gray-400'}`}></div>
-                <span className="text-sm text-gray-600">{systemStatus}</span>
-              </div>
-              <button 
-                onClick={checkSystemHealth}
-                className="p-2 text-gray-400 hover:text-gray-600"
-                title="刷新系统状态"
-              >
+
+            {/* 中间: 导航链接 - 图标为主 */}
+            <div className="flex items-center gap-1">
+              <Link href="/history" className="p-2 text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors" title="历史对话">
+                <i className="fas fa-history"></i>
+              </Link>
+              <Link href="/observability" className="p-2 text-blue-500 hover:text-blue-700 hover:bg-blue-50 rounded-lg transition-colors" title="可观测性">
+                <i className="fas fa-chart-line"></i>
+              </Link>
+              <Link href="/trace-trie" className="p-2 text-purple-500 hover:text-purple-700 hover:bg-purple-50 rounded-lg transition-colors" title="Trace-Trie">
+                <i className="fas fa-sitemap"></i>
+              </Link>
+              <Link href="/domain-vectors" className="p-2 text-emerald-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors" title="领域向量">
+                <i className="fas fa-crosshairs"></i>
+              </Link>
+              <Link href="/self-rag" className="p-2 text-indigo-500 hover:text-indigo-700 hover:bg-indigo-50 rounded-lg transition-colors" title="Self-RAG">
                 <i className="fas fa-sync-alt"></i>
-              </button>
-              <button 
-                onClick={loadLatestConversation}
-                className="p-2 text-gray-400 hover:text-gray-600"
-                title="重新加载对话"
+              </Link>
+              <Link href="/milvus" className="p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors" title="Milvus">
+                <i className="fas fa-database"></i>
+              </Link>
+              <div className="w-px h-6 bg-gray-200 mx-1"></div>
+              <button
+                onClick={handleDeleteAllConversations}
+                className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                title="清空对话"
               >
-                <i className="fas fa-redo"></i>
+                <i className="fas fa-trash-alt"></i>
+              </button>
+            </div>
+
+            {/* 右侧: 状态 */}
+            <div className="flex items-center gap-2">
+              <div className="flex items-center px-2 py-1 bg-gray-50 rounded-lg">
+                <div className={`w-2 h-2 rounded-full mr-2 ${systemStatus === '运行中' ? 'bg-green-400 animate-pulse' : 'bg-gray-400'}`}></div>
+                <span className="text-xs text-gray-600">{systemStatus}</span>
+              </div>
+              <button onClick={checkSystemHealth} className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded" title="刷新">
+                <i className="fas fa-sync-alt text-sm"></i>
               </button>
             </div>
           </div>
         </div>
       </nav>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* 主聊天区域 */}
           <div className="lg:col-span-2">
             <div className="bg-white rounded-lg shadow-sm border">
@@ -937,7 +1015,15 @@ export default function HomePage() {
           </div>
 
           {/* 侧边栏 */}
-          <div className="space-y-6">
+          <div className="space-y-4">
+            {/* Milvus 查询可视化 - 当选择 Milvus 后端时显示 */}
+            {storageBackend === 'milvus' && (
+              <MilvusQueryVisualizer
+                embeddingModel={embeddingModel}
+                defaultExpanded={false}
+              />
+            )}
+            
             <FileUpload
               selectedFiles={selectedFiles}
               isUploading={isUploading}
@@ -971,8 +1057,8 @@ export default function HomePage() {
             />
             
             <SystemInfo
-              docCount={docCount}
-              embeddingDim={embeddingDim}
+              docCount={storageBackend === 'milvus' ? (milvusStats?.rowCount || 0) : docCount}
+              embeddingDim={storageBackend === 'milvus' ? (milvusStats?.embeddingDimension || 0) : embeddingDim}
               systemStatus={systemStatus}
               llmModel={llmModel}
               embeddingModel={embeddingModel}
