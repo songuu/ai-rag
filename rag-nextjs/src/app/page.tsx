@@ -937,6 +937,9 @@ export default function HomePage() {
               <Link href="/agentic-rag" className="p-2 text-fuchsia-500 hover:text-fuchsia-700 hover:bg-fuchsia-50 rounded-lg transition-colors" title="Agentic RAG">
                 <i className="fas fa-robot"></i>
               </Link>
+              <Link href="/self-corrective-rag" className="p-2 text-teal-500 hover:text-teal-700 hover:bg-teal-50 rounded-lg transition-colors" title="Self-Corrective RAG">
+                <i className="fas fa-redo-alt"></i>
+              </Link>
               <Link href="/milvus" className="p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors" title="Milvus">
                 <i className="fas fa-database"></i>
               </Link>
@@ -1170,6 +1173,39 @@ export default function HomePage() {
 
           {/* 侧边栏 */}
           <div className="space-y-4">
+
+            {/* 高级 RAG 模式快捷入口 */}
+            <div className="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 rounded-xl border border-indigo-200 p-4">
+              <h3 className="text-sm font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                <span className="text-lg">🚀</span>
+                高级 RAG 模式
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                <Link
+                  href="/self-corrective-rag"
+                  className="group flex flex-col items-center gap-2 p-3 bg-white rounded-lg border border-teal-200 hover:border-teal-400 hover:shadow-md transition-all"
+                >
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center text-white text-lg group-hover:scale-110 transition-transform">
+                    🔄
+                  </div>
+                  <span className="text-xs font-medium text-gray-700">Self-Corrective</span>
+                  <span className="text-[10px] text-gray-500">自省式修正</span>
+                </Link>
+                <Link
+                  href="/agentic-rag"
+                  className="group flex flex-col items-center gap-2 p-3 bg-white rounded-lg border border-fuchsia-200 hover:border-fuchsia-400 hover:shadow-md transition-all"
+                >
+                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-fuchsia-400 to-purple-500 flex items-center justify-center text-white text-lg group-hover:scale-110 transition-transform">
+                    🤖
+                  </div>
+                  <span className="text-xs font-medium text-gray-700">Agentic RAG</span>
+                  <span className="text-[10px] text-gray-500">代理化工作流</span>
+                </Link>
+              </div>
+              <p className="text-[10px] text-gray-500 mt-3 text-center">
+                基于 LangGraph + Milvus 的智能检索增强生成
+              </p>
+            </div>
 
             <FileUpload
               selectedFiles={selectedFiles}

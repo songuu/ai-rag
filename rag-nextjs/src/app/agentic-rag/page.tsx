@@ -194,9 +194,23 @@ export default function AgenticRAGPage() {
                 </span>
               </div>
             </div>
-            <div className="flex items-center gap-2 text-white/60 text-sm">
-              <i className="fas fa-info-circle"></i>
-              <span>代理化检索增强生成系统</span>
+            <div className="flex items-center gap-4">
+              <Link 
+                href="/self-corrective-rag"
+                className="px-3 py-1.5 bg-teal-500/20 text-teal-300 rounded-lg hover:bg-teal-500/30 transition-colors text-sm flex items-center gap-2"
+              >
+                🔄 Self-Corrective RAG
+              </Link>
+              <Link 
+                href="/self-rag"
+                className="px-3 py-1.5 bg-indigo-500/20 text-indigo-300 rounded-lg hover:bg-indigo-500/30 transition-colors text-sm flex items-center gap-2"
+              >
+                🔁 Self-RAG
+              </Link>
+              <div className="flex items-center gap-2 text-white/60 text-sm">
+                <i className="fas fa-info-circle"></i>
+                <span>代理化检索增强生成</span>
+              </div>
             </div>
           </div>
         </div>
