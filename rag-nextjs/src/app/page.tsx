@@ -1180,26 +1180,36 @@ export default function HomePage() {
                 <span className="text-lg">🚀</span>
                 高级 RAG 模式
               </h3>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-2">
+                <Link
+                  href="/reasoning-rag"
+                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-purple-200 hover:border-purple-400 hover:shadow-md transition-all"
+                >
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white text-base group-hover:scale-110 transition-transform">
+                    🧠
+                  </div>
+                  <span className="text-xs font-medium text-gray-700">Reasoning</span>
+                  <span className="text-[9px] text-gray-500">推理增强</span>
+                </Link>
                 <Link
                   href="/self-corrective-rag"
-                  className="group flex flex-col items-center gap-2 p-3 bg-white rounded-lg border border-teal-200 hover:border-teal-400 hover:shadow-md transition-all"
+                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-teal-200 hover:border-teal-400 hover:shadow-md transition-all"
                 >
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center text-white text-lg group-hover:scale-110 transition-transform">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-teal-400 to-cyan-500 flex items-center justify-center text-white text-base group-hover:scale-110 transition-transform">
                     🔄
                   </div>
-                  <span className="text-xs font-medium text-gray-700">Self-Corrective</span>
-                  <span className="text-[10px] text-gray-500">自省式修正</span>
+                  <span className="text-xs font-medium text-gray-700">Corrective</span>
+                  <span className="text-[9px] text-gray-500">自省修正</span>
                 </Link>
                 <Link
                   href="/agentic-rag"
-                  className="group flex flex-col items-center gap-2 p-3 bg-white rounded-lg border border-fuchsia-200 hover:border-fuchsia-400 hover:shadow-md transition-all"
+                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-fuchsia-200 hover:border-fuchsia-400 hover:shadow-md transition-all"
                 >
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-fuchsia-400 to-purple-500 flex items-center justify-center text-white text-lg group-hover:scale-110 transition-transform">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-fuchsia-400 to-purple-500 flex items-center justify-center text-white text-base group-hover:scale-110 transition-transform">
                     🤖
                   </div>
-                  <span className="text-xs font-medium text-gray-700">Agentic RAG</span>
-                  <span className="text-[10px] text-gray-500">代理化工作流</span>
+                  <span className="text-xs font-medium text-gray-700">Agentic</span>
+                  <span className="text-[9px] text-gray-500">代理工作流</span>
                 </Link>
               </div>
               <p className="text-[10px] text-gray-500 mt-3 text-center">

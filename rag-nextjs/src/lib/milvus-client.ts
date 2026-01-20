@@ -644,38 +644,58 @@ export class MilvusVectorStore {
   }
 }
 
-// 全局单例
-let milvusInstance: MilvusVectorStore | null = null;
+// 全局实例缓存 - 按集合名称缓存不同的实例
+const milvusInstances: Map<string, MilvusVectorStore> = new Map();
 
 /**
- * 获取 Milvus 实例（单例模式，支持配置更新）
+ * 获取 Milvus 实例（按集合名称缓存，支持多集合并存）
  */
 export function getMilvusInstance(config?: MilvusConfig): MilvusVectorStore {
-  if (!milvusInstance) {
-    milvusInstance = new MilvusVectorStore(config);
-    console.log('[Milvus] Created new instance with config:', config?.collectionName, config?.embeddingDimension);
+  const collectionName = config?.collectionName || 'rag_documents';
+  
+  let instance = milvusInstances.get(collectionName);
+  
+  if (!instance) {
+    // 创建新实例
+    instance = new MilvusVectorStore(config);
+    milvusInstances.set(collectionName, instance);
+    console.log(`[Milvus] Created new instance for collection: ${collectionName}`);
   } else if (config) {
-    // 检查关键配置是否变化，如果变化则重建实例
-    const currentConfig = milvusInstance.getConfig();
-    if (currentConfig.embeddingDimension !== config.embeddingDimension ||
-        currentConfig.collectionName !== config.collectionName) {
-      console.log('[Milvus] Config changed, recreating instance...');
-      console.log('[Milvus] Old:', currentConfig.embeddingDimension, 'New:', config.embeddingDimension);
-      // 断开旧连接
-      milvusInstance.disconnect().catch(() => {});
-      milvusInstance = new MilvusVectorStore(config);
+    // 检查维度配置是否变化
+    const currentConfig = instance.getConfig();
+    if (config.embeddingDimension && currentConfig.embeddingDimension !== config.embeddingDimension) {
+      console.log(`[Milvus] Dimension changed for ${collectionName}, recreating instance...`);
+      console.log(`[Milvus] Old: ${currentConfig.embeddingDimension}D, New: ${config.embeddingDimension}D`);
+      // 断开旧连接并创建新实例
+      instance.disconnect().catch(() => {});
+      instance = new MilvusVectorStore(config);
+      milvusInstances.set(collectionName, instance);
     }
   }
-  return milvusInstance;
+  
+  console.log(`[Milvus] Using instance for collection: ${collectionName}`);
+  return instance;
 }
 
 /**
- * 重置 Milvus 实例
+ * 重置指定集合的 Milvus 实例
  */
-export async function resetMilvusInstance(): Promise<void> {
-  if (milvusInstance) {
-    await milvusInstance.disconnect();
-    milvusInstance = null;
+export async function resetMilvusInstance(collectionName?: string): Promise<void> {
+  if (collectionName) {
+    const instance = milvusInstances.get(collectionName);
+    if (instance) {
+      await instance.disconnect();
+      milvusInstances.delete(collectionName);
+      console.log(`[Milvus] Reset instance for collection: ${collectionName}`);
+    }
+  } else {
+    // 重置所有实例
+    for (const [name, instance] of milvusInstances) {
+      await instance.disconnect();
+      console.log(`[Milvus] Disconnected from collection: ${name}`);
+    }
+    milvusInstances.clear();
+    console.log('[Milvus] All instances reset');
   }
 }
 

@@ -356,6 +356,12 @@ export default function SelfCorrectiveRAGPage() {
             
             <div className="flex items-center gap-3">
               <Link
+                href="/reasoning-rag"
+                className="px-4 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors flex items-center gap-2"
+              >
+                🧠 Reasoning RAG
+              </Link>
+              <Link
                 href="/agentic-rag"
                 className="px-4 py-2 bg-fuchsia-100 text-fuchsia-700 rounded-lg hover:bg-fuchsia-200 transition-colors flex items-center gap-2"
               >

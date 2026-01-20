@@ -4,13 +4,18 @@ const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
 // 已知的模型分类
 const MODEL_CATEGORIES = {
+  reasoning: {
+    // 推理模型 - 支持思维链的高级模型
+    patterns: ['deepseek-r1', 'qwen3', 'o1', 'o3', 'gpt-oss'],
+    include: ['deepseek-r1', 'qwen3']
+  },
   llm: {
     patterns: [
       'llama', 'mistral', 'mixtral', 'gemma', 'phi', 'qwen',
       'deepseek', 'yi', 'solar', 'vicuna', 'orca', 'starling',
       'openchat', 'neural', 'dolphin', 'wizard', 'falcon'
     ],
-    exclude: ['embed', 'embedding']
+    exclude: ['embed', 'embedding', 'deepseek-r1', 'qwen3']
   },
   embedding: {
     patterns: [
@@ -23,6 +28,53 @@ const MODEL_CATEGORIES = {
 
 // 推荐的模型配置
 const RECOMMENDED_MODELS = {
+  reasoning: [
+    {
+      name: 'deepseek-r1:7b',
+      displayName: 'DeepSeek R1 7B',
+      description: '深度推理模型，支持思维链 (Chain of Thought)',
+      size: '4.7 GB',
+      contextLength: 32768,
+      supportsThinking: true,
+      recommended: true
+    },
+    {
+      name: 'deepseek-r1:14b',
+      displayName: 'DeepSeek R1 14B',
+      description: '更强大的深度推理模型',
+      size: '8.9 GB',
+      contextLength: 32768,
+      supportsThinking: true,
+      recommended: true
+    },
+    {
+      name: 'deepseek-r1:32b',
+      displayName: 'DeepSeek R1 32B',
+      description: '顶级深度推理模型，最强推理能力',
+      size: '19 GB',
+      contextLength: 65536,
+      supportsThinking: true,
+      recommended: false
+    },
+    {
+      name: 'qwen3:8b',
+      displayName: 'Qwen 3 8B',
+      description: '阿里通义千问第三代，支持推理',
+      size: '4.9 GB',
+      contextLength: 32768,
+      supportsThinking: true,
+      recommended: true
+    },
+    {
+      name: 'qwen3:14b',
+      displayName: 'Qwen 3 14B',
+      description: '更强大的通义千问推理版',
+      size: '9.0 GB',
+      contextLength: 32768,
+      supportsThinking: true,
+      recommended: false
+    }
+  ],
   llm: [
     {
       name: 'llama3.1:latest',
@@ -102,8 +154,17 @@ const RECOMMENDED_MODELS = {
 };
 
 // 判断模型类型
-function categorizeModel(modelName: string): 'llm' | 'embedding' | 'unknown' {
+function categorizeModel(modelName: string): 'reasoning' | 'llm' | 'embedding' | 'unknown' {
   const nameLower = modelName.toLowerCase();
+  
+  // 首先检查是否为推理模型
+  if (MODEL_CATEGORIES.reasoning.include.some(pattern => nameLower.includes(pattern))) {
+    return 'reasoning';
+  }
+  
+  if (MODEL_CATEGORIES.reasoning.patterns.some(pattern => nameLower.includes(pattern))) {
+    return 'reasoning';
+  }
   
   // 检查是否为 embedding 模型
   if (MODEL_CATEGORIES.embedding.include.some(pattern => nameLower.includes(pattern))) {
@@ -114,7 +175,7 @@ function categorizeModel(modelName: string): 'llm' | 'embedding' | 'unknown' {
     return 'embedding';
   }
   
-  // 排除 embedding 后检查 LLM
+  // 排除 embedding 和 reasoning 后检查 LLM
   if (MODEL_CATEGORIES.llm.exclude.some(pattern => nameLower.includes(pattern))) {
     return 'unknown';
   }
@@ -166,6 +227,7 @@ export async function GET(request: NextRequest) {
     }
     
     const data = await statusResponse.json();
+
     const allModels = data.models || [];
     
     // 如果没有任何模型
@@ -183,6 +245,7 @@ export async function GET(request: NextRequest) {
     }
     
     // 分类模型
+    const reasoningModels: any[] = [];
     const llmModels: any[] = [];
     const embeddingModels: any[] = [];
     const unknownModels: any[] = [];
@@ -199,10 +262,13 @@ export async function GET(request: NextRequest) {
         sizeFormatted: formatBytes(model.size),
         modifiedAt: model.modified_at,
         digest: model.digest,
-        category
+        category,
+        supportsThinking: category === 'reasoning'
       };
       
-      if (category === 'llm') {
+      if (category === 'reasoning') {
+        reasoningModels.push(modelInfo);
+      } else if (category === 'llm') {
         llmModels.push(modelInfo);
       } else if (category === 'embedding') {
         embeddingModels.push(modelInfo);
@@ -213,6 +279,10 @@ export async function GET(request: NextRequest) {
     
     // 获取推荐模型状态
     const recommendedStatus = {
+      reasoning: RECOMMENDED_MODELS.reasoning.map(rec => ({
+        ...rec,
+        installed: reasoningModels.some(m => m.name.includes(rec.name.split(':')[0]))
+      })),
       llm: RECOMMENDED_MODELS.llm.map(rec => ({
         ...rec,
         installed: llmModels.some(m => m.name.includes(rec.name.split(':')[0]))
@@ -224,29 +294,34 @@ export async function GET(request: NextRequest) {
     };
     
     // 检查是否有推荐模型已安装
+    const hasRecommendedReasoning = recommendedStatus.reasoning.some(m => m.installed);
     const hasRecommendedLLM = recommendedStatus.llm.some(m => m.installed);
     const hasRecommendedEmbedding = recommendedStatus.embedding.some(m => m.installed);
     
     return NextResponse.json({
       success: true,
       hasModels: true,
+      reasoningModels,
       llmModels,
       embeddingModels,
       unknownModels,
       allModels,
       count: {
         total: allModels.length,
+        reasoning: reasoningModels.length,
         llm: llmModels.length,
         embedding: embeddingModels.length,
         unknown: unknownModels.length
       },
       recommended: recommendedStatus,
       status: {
+        hasRecommendedReasoning,
         hasRecommendedLLM,
         hasRecommendedEmbedding,
         ready: hasRecommendedLLM && hasRecommendedEmbedding
       },
       warnings: [
+        ...(!hasRecommendedReasoning ? ['未检测到推理模型，建议安装 DeepSeek R1 或 Qwen3 以使用 Reasoning RAG'] : []),
         ...(!hasRecommendedLLM ? ['未检测到推荐的 LLM 模型，建议安装 Llama 3.1 或 Qwen 2.5'] : []),
         ...(!hasRecommendedEmbedding ? ['未检测到推荐的 Embedding 模型，建议安装 nomic-embed-text'] : []),
         ...(unknownModels.length > 0 ? [`检测到 ${unknownModels.length} 个未分类的模型`] : [])
