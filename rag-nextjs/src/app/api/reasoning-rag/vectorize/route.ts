@@ -154,9 +154,8 @@ export async function POST(request: NextRequest) {
     await milvus.initializeCollection();
 
     // 创建 Embedding 模型
-    const cleanModelName = embeddingModel.split(':')[0];
     const embeddings = new OllamaEmbeddings({
-      model: cleanModelName,
+      model: embeddingModel,
       baseUrl: OLLAMA_BASE_URL,
     });
 
@@ -231,7 +230,7 @@ export async function POST(request: NextRequest) {
       success: true,
       message: `成功向量化 ${results.filter(r => r.success).length}/${filesToProcess.length} 个文件`,
       collection: REASONING_COLLECTION,
-      embeddingModel: cleanModelName,
+      embeddingModel,
       dimension,
       totalChunks,
       totalDocuments,

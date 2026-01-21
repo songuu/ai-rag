@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
 
         // 创建 Embedding 模型
         const embeddings = new OllamaEmbeddings({
-          model: embeddingModel.split(':')[0],
+          model: embeddingModel,
           baseUrl: OLLAMA_BASE_URL,
         });
 
@@ -188,7 +188,7 @@ export async function POST(request: NextRequest) {
 
         // 创建 Embedding 模型
         const embeddings = new OllamaEmbeddings({
-          model: embeddingModel.split(':')[0],
+          model: embeddingModel,
           baseUrl: OLLAMA_BASE_URL,
         });
 

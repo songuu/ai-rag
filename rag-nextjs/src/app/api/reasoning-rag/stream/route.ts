@@ -32,11 +32,11 @@ export async function POST(request: NextRequest) {
     // 提取配置
     const {
       // 路由配置
-      routerModel = 'llama3.2',
+      routerModel = 'llama3.2:1b',
       enableRouting = true,
       
       // 模型配置
-      fastModel = 'llama3.2',        // Lane 1 & 2 使用快速模型
+      fastModel = 'qwen2.5:0.5b',        // Lane 1 & 2 使用快速模型
       reasoningModel = 'deepseek-r1:7b',  // Lane 3 使用推理模型
       embeddingModel = 'nomic-embed-text',
       

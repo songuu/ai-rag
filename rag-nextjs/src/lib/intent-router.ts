@@ -47,42 +47,64 @@ export interface RouterConfig {
 
 // ==================== 意图分类提示词 ====================
 
-const CLASSIFICATION_PROMPT = `你是一个智能意图分类器。分析用户查询并将其分类为以下三种类型之一：
+const CLASSIFICATION_PROMPT = `你是一个智能意图分类器。分析用户查询并判断需要哪种处理方式。
 
-## 分类标准
+## 三种分类
 
-### 1. chat (闲聊/通用)
-- 打招呼、问候: "你好", "早上好", "你是谁"
-- 通用知识: "什么是AI", "今天星期几"
-- 写作请求: "帮我写封邮件", "写一首诗"
-- 不需要查询知识库的问题
+### 1. chat (闲聊/通用) - 不需要知识库
+- 问候: "你好", "早上好"
+- 身份: "你是谁", "介绍一下你自己"
+- 写作: "帮我写封邮件", "写一首诗"
+- 通用常识: "今天星期几"
 
-### 2. fast_rag (快速知识库问答)
-- 事实性问题: "A公司的2024年营收是多少？"
-- 简单查询: "总结一下这份文档"
+### 2. fast_rag (简单知识库查询) - 一步检索即可回答
+- 直接查询: "张三的职位是什么？"
 - 定义查询: "什么是RAG系统？"
-- 答案直接在文档中，找到就能答
+- 文档摘要: "总结一下这份文档"
+- 单一事实: "公司成立于哪一年？"
 
-### 3. reasoning (复杂推理)
-- 对比分析: "对比A公司和B公司过去三年的增长策略异同"
-- 假设推演: "如果不考虑汇率影响，这个项目的实际收益如何？"
-- 多源综合: "综合分析市场趋势和公司财报，给出投资建议"
-- 需要逻辑推演、多步骤思考
+### 3. reasoning (复杂推理) - 需要多步思考或推理 ⚠️ 重要
+以下情况必须选择 reasoning:
+
+**多步推理**: 需要先获取A，再用A推导B
+- "马斯克出生那一年，美国总统是谁？" → 先查马斯克生年，再查该年总统
+- "张三入职时公司有多少员工？" → 先查入职时间，再查当时员工数
+
+**条件关联**: 涉及时间、条件的关联查询
+- "当苹果市值突破万亿时，CEO是谁？"
+- "2020年之前，公司最大的客户是哪家？"
+
+**对比分析**: 比较多个对象
+- "对比A和B的优劣"
+- "这两种方案哪个更好？"
+
+**因果推理**: 分析原因、影响、结果
+- "什么导致了项目延期？"
+- "这个决策会带来什么影响？"
+
+**计算推断**: 需要计算或逻辑推断
+- "两人相差多少岁？"
+- "按这个增长率，明年能达到多少？"
+
+**综合分析**: 整合多个信息源
+- "综合各方面因素，给出建议"
+
+## 判断要点
+- 如果问题包含"那一年"、"那时候"、"当时"等时间条件词，通常是 reasoning
+- 如果问题涉及两个以上实体的关联，通常是 reasoning  
+- 如果答案不能直接从单一文档片段获得，需要推导，选 reasoning
+- 宁可选 reasoning 也不要漏掉复杂问题
 
 ## 用户查询
 "{query}"
 
-## 输出格式
-请严格按照以下 JSON 格式输出（不要添加任何其他内容）:
-{{
-  "intent": "chat" 或 "fast_rag" 或 "reasoning",
-  "confidence": 0.0到1.0之间的数字,
-  "reasoning": "分类理由（简短）",
-  "keywords": ["关键词1", "关键词2"],
-  "complexity": "low" 或 "medium" 或 "high",
-  "requiresRetrieval": true或false,
-  "requiresReasoning": true或false
-}}`;
+## 输出要求
+只输出JSON，不要任何解释文字！confidence必须是单个数字（如0.85），不能是范围。
+
+示例输出:
+{{"intent":"reasoning","confidence":0.85,"reasoning":"多步推理","keywords":["时间条件"],"complexity":"high","requiresRetrieval":true,"requiresReasoning":true}}
+
+你的输出:`;
 
 // ==================== LangGraph 状态定义 ====================
 
@@ -121,21 +143,48 @@ async function classifyIntentNode(
     }
 
     // 使用 LLM 进行深度分类
+    console.log(`[INTENT_ROUTER] 调用 LLM 模型: ${state.routerModel}`);
+    
     const llm = new Ollama({
       model: state.routerModel,
       baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     });
 
     const prompt = CLASSIFICATION_PROMPT.replace('{query}', escapeBraces(state.query));
+    
+    console.log(`[INTENT_ROUTER] 发送分类请求...`);
     const response = await llm.invoke(prompt);
+    
+    console.log(`[INTENT_ROUTER] LLM 原始响应 (前500字符):`);
+    console.log(response.substring(0, 500));
 
     // 解析 JSON 响应
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
+      console.error(`[INTENT_ROUTER] 无法从响应中提取 JSON`);
       throw new Error('无法解析分类结果');
     }
+    
+    // 预处理 JSON 字符串，修复常见的 LLM 输出格式问题
+    let jsonStr = jsonMatch[0];
+    
+    // 修复 "0.9-1.0" 这种范围格式，取第一个数字
+    jsonStr = jsonStr.replace(/"confidence":\s*([\d.]+)\s*-\s*[\d.]+/g, '"confidence": $1');
+    
+    // 修复没有引号的值 (如 true或false → true)
+    jsonStr = jsonStr.replace(/:\s*"?(chat|fast_rag|reasoning)"?\s*或[^,}]*/g, ': "$1"');
+    jsonStr = jsonStr.replace(/:\s*"?(low|medium|high)"?\s*或[^,}]*/g, ': "$1"');
+    jsonStr = jsonStr.replace(/:\s*"?(true|false)"?\s*或[^,}]*/g, (match, val) => `: ${val}`);
+    
+    // 修复可能的尾随逗号
+    jsonStr = jsonStr.replace(/,\s*}/g, '}');
+    jsonStr = jsonStr.replace(/,\s*]/g, ']');
+    
+    console.log(`[INTENT_ROUTER] 原始 JSON: ${jsonMatch[0].substring(0, 200)}...`);
+    console.log(`[INTENT_ROUTER] 修复后 JSON: ${jsonStr.substring(0, 200)}...`);
 
-    const parsed = JSON.parse(jsonMatch[0]);
+    const parsed = JSON.parse(jsonStr);
+    console.log(`[INTENT_ROUTER] 解析结果:`, parsed);
     
     // 构建分类结果
     const classification: IntentClassification = {
@@ -161,7 +210,10 @@ async function classifyIntentNode(
     return { classification };
 
   } catch (error) {
-    console.error('[INTENT_ROUTER] 分类错误:', error);
+    console.error('[INTENT_ROUTER] ❌ 分类错误:', error);
+    console.error('[INTENT_ROUTER] 错误详情:', error instanceof Error ? error.message : String(error));
+    console.error('[INTENT_ROUTER] 使用的路由模型:', state.routerModel);
+    console.error('[INTENT_ROUTER] ⚠️ 降级到默认 Lane 2');
     
     // 降级到默认分类
     const fallbackClassification: IntentClassification = {
@@ -220,24 +272,38 @@ function quickIntentMatch(query: string): IntentClassification | null {
   }
 
   // 复杂推理模式 - 关键词匹配
-  const reasoningKeywords = [
-    '对比', '比较', '分析', '综合', '推断', '推理',
-    '如果', '假设', '假如', '倘若',
-    '为什么会', '原因是什么', '背后的逻辑',
-    '趋势', '预测', '评估', '建议',
-    '异同', '优劣', '利弊'
+  // 强触发关键词 - 只要出现就走推理车道
+  const strongReasoningKeywords = [
+    '对比', '比较', '综合分析', '深度分析', '推断', '推理',
+    '异同', '优劣', '利弊', '假设', '假如', '倘若',
+    '为什么会', '原因是什么', '背后的逻辑'
+  ];
+  
+  // 弱触发关键词 - 需要配合其他条件
+  const weakReasoningKeywords = [
+    '分析', '综合', '如果', '趋势', '预测', '评估', '建议'
   ];
 
-  const hasReasoningKeyword = reasoningKeywords.some(kw => q.includes(kw));
-  const isLongQuery = q.length > 50;
+  const hasStrongKeyword = strongReasoningKeywords.some(kw => q.includes(kw));
+  const hasWeakKeyword = weakReasoningKeywords.some(kw => q.includes(kw));
+  const isLongQuery = q.length > 30;  // 降低长度阈值
   const hasMultipleQuestions = (q.match(/？|\?/g) || []).length > 1;
+  const hasMultipleEntities = (q.match(/和|与|跟|还有/g) || []).length >= 1; // 涉及多个实体
 
-  if (hasReasoningKeyword && (isLongQuery || hasMultipleQuestions)) {
+  // 强关键词直接触发，或弱关键词+其他条件触发
+  if (hasStrongKeyword || (hasWeakKeyword && (isLongQuery || hasMultipleQuestions || hasMultipleEntities))) {
+    const matchedKeywords = [
+      ...strongReasoningKeywords.filter(kw => q.includes(kw)),
+      ...weakReasoningKeywords.filter(kw => q.includes(kw))
+    ];
+    
     return {
       intent: 'reasoning',
-      confidence: 0.85,
-      reasoning: '规则匹配: 包含推理关键词且问题复杂',
-      keywords: reasoningKeywords.filter(kw => q.includes(kw)),
+      confidence: hasStrongKeyword ? 0.90 : 0.80,
+      reasoning: hasStrongKeyword 
+        ? '规则匹配: 包含强推理关键词' 
+        : '规则匹配: 包含推理关键词且问题有一定复杂度',
+      keywords: matchedKeywords,
       complexity: 'high',
       requiresRetrieval: true,
       requiresReasoning: true,
@@ -308,7 +374,7 @@ export async function routeIntent(
   
   const initialState: Partial<typeof RouterAnnotation.State> = {
     query,
-    routerModel: config?.routerModel || 'llama3.2',
+    routerModel: config?.routerModel || 'qwen2.5:0.5b',
     startTime
   };
 

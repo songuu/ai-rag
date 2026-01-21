@@ -19,9 +19,8 @@ const defaultMilvusConfig: MilvusConfig = {
 };
 
 function getEmbeddingModel(modelName: string): OllamaEmbeddings {
-  const cleanName = modelName.split(':')[0];
   return new OllamaEmbeddings({
-    model: cleanName,
+    model: modelName,
     baseUrl: OLLAMA_BASE_URL,
   });
 }

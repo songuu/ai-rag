@@ -82,7 +82,7 @@ function selectModelByDimension(dimension: number, preferredModel?: string): str
   if (preferredModel) {
     const modelDim = getModelDimension(preferredModel);
     if (modelDim === dimension) {
-      return preferredModel.split(':')[0]; // 移除 :latest 后缀
+      return preferredModel; // 保留完整模型名称（包括版本标签）
     }
   }
   
@@ -92,13 +92,12 @@ function selectModelByDimension(dimension: number, preferredModel?: string): str
 
 // 获取 Embedding 模型
 function getEmbeddingModel(modelName?: string) {
-  // 移除可能的 :latest 后缀
-  const cleanModelName = (modelName || EMBEDDING_MODEL).split(':')[0];
-  console.log(`[Milvus API] Creating embedding model: ${cleanModelName}`);
+  const actualModelName = modelName || EMBEDDING_MODEL;
+  console.log(`[Milvus API] Creating embedding model: ${actualModelName}`);
   
   return new OllamaEmbeddings({
     baseUrl: OLLAMA_BASE_URL,
-    model: cleanModelName,
+    model: actualModelName,
   });
 }
 
@@ -182,11 +181,11 @@ export async function POST(request: NextRequest) {
         const collectionDimension = stats?.embeddingDimension || 768;
         console.log(`[Milvus Insert] Collection dimension: ${collectionDimension}D`);
 
-        // 清理模型名称并获取维度信息
-        const cleanModelName = (embeddingModel || EMBEDDING_MODEL).split(':')[0];
-        const modelDimension = getModelDimension(cleanModelName);
+        // 获取模型维度信息
+        const actualModelName = embeddingModel || EMBEDDING_MODEL;
+        const modelDimension = getModelDimension(actualModelName);
         
-        console.log(`[Milvus Insert] Using model: "${cleanModelName}" (${modelDimension}D)`);
+        console.log(`[Milvus Insert] Using model: "${actualModelName}" (${modelDimension}D)`);
         
         // 检查维度是否匹配
         if (modelDimension !== collectionDimension) {
@@ -194,7 +193,7 @@ export async function POST(request: NextRequest) {
           console.warn(`[Milvus Insert] 这可能会导致插入失败！`);
         }
         
-        const embeddings = getEmbeddingModel(cleanModelName);
+        const embeddings = getEmbeddingModel(actualModelName);
         
         // 为每个文档生成向量
         console.log(`[Milvus Insert] Generating embeddings for ${documents.length} documents...`);
@@ -219,7 +218,7 @@ export async function POST(request: NextRequest) {
             error: `向量维度不匹配！生成的向量: ${actualDimension}维, 集合要求: ${collectionDimension}维。`,
             generatedDimension: actualDimension,
             collectionDimension,
-            usedModel: cleanModelName,
+            usedModel: actualModelName,
           }, { status: 400 });
         }
 
@@ -232,7 +231,7 @@ export async function POST(request: NextRequest) {
           success: true,
           message: `Inserted ${ids.length} documents`,
           ids,
-          embeddingModel: cleanModelName,
+          embeddingModel: actualModelName,
           dimension: actualDimension,
           collectionDimension,
         });

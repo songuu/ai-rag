@@ -57,7 +57,7 @@ export async function* executeLane1(
 ): AsyncGenerator<StreamEvent> {
   const startTime = Date.now();
   // Lane 1 使用快速模型，而不是推理模型
-  const model = config.fastModel || 'llama3.2';
+  const model = config.fastModel || 'qwen2.5:0.5b';
 
   console.log(`\n[Lane 1] 极速车道启动`);
   console.log(`[Lane 1] 使用快速模型: ${model}`);
@@ -90,7 +90,7 @@ export async function* executeLane1(
 
   try {
     const llm = new Ollama({
-      model: model.split(':')[0],
+      model: model,
       baseUrl: OLLAMA_BASE_URL,
       temperature: config.temperature ?? 0.7,
     });
@@ -221,7 +221,7 @@ export async function* executeLane2(
     console.log(`[Lane 2] 向量维度: ${dimension}, 嵌入模型: ${embeddingModelName}`);
 
     const embeddings = new OllamaEmbeddings({
-      model: embeddingModelName.split(':')[0],
+      model: embeddingModelName,
       baseUrl: OLLAMA_BASE_URL,
     });
 
@@ -285,7 +285,7 @@ export async function* executeLane2(
     };
 
     const llm = new Ollama({
-      model: model.split(':')[0],
+      model: model,
       baseUrl: OLLAMA_BASE_URL,
       temperature: config.temperature ?? 0.3,
     });
@@ -450,7 +450,7 @@ export async function* executeLane3(
 
     // 使用推理模型分析查询
     const plannerLLM = new Ollama({
-      model: reasoningModel.split(':')[0],
+      model: reasoningModel,
       baseUrl: OLLAMA_BASE_URL,
       temperature: 0.3,
     });
@@ -511,7 +511,7 @@ export async function* executeLane3(
     console.log(`[Lane 3] 向量维度: ${dimension}, 嵌入模型: ${embeddingModelName}`);
 
     const embeddings = new OllamaEmbeddings({
-      model: embeddingModelName.split(':')[0],
+      model: embeddingModelName,
       baseUrl: OLLAMA_BASE_URL,
     });
 
@@ -604,7 +604,7 @@ export async function* executeLane3(
     };
 
     const reasonerLLM = new Ollama({
-      model: reasoningModel.split(':')[0],
+      model: reasoningModel,
       baseUrl: OLLAMA_BASE_URL,
       temperature: config.temperature ?? 0.5,
     });

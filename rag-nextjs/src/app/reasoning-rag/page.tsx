@@ -122,6 +122,7 @@ const ConfigPanel: React.FC<{
   suggestion?: string | null;
   onRefresh?: () => void;
 }> = ({ config, onChange, availableModels, llmModels, embeddingModels, isExpanded, onToggle, errorMessage, suggestion, onRefresh }) => {
+  
   return (
     <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-purple-500/30 overflow-hidden">
       <button
@@ -222,7 +223,7 @@ const ConfigPanel: React.FC<{
           </div>
           
           {/* 快速模型选择 (Lane 1 & 2) */}
-          <div>
+          {/* <div>
             <label className="text-sm font-medium text-blue-300 mb-2 block">
               ⚡ 快速模型 (Lane 1 & 2)
             </label>
@@ -246,7 +247,7 @@ const ConfigPanel: React.FC<{
             <p className="mt-1 text-xs text-gray-500">
               用于闲聊和简单 RAG 问答，响应速度快
             </p>
-          </div>
+          </div> */}
           
           {/* 向量模型选择 */}
           <div>
@@ -503,7 +504,7 @@ export default function ReasoningRAGPage() {
   }>({ isRouting: false });
   
   const [config, setConfig] = useState<Config>({
-    fastModel: 'llama3.2',       // Lane 1 & 2 快速模型
+    fastModel: 'qwen2.5:0.5b',       // Lane 1 & 2 快速模型
     reasoningModel: 'deepseek-r1:7b', // Lane 3 推理模型
     embeddingModel: 'nomic-embed-text',
     topK: 50,
@@ -514,7 +515,7 @@ export default function ReasoningRAGPage() {
     temperature: 0.7,
     thinkingTimeout: 120, // 默认 120 秒
     enableRouting: true,  // 默认启用意图路由
-    routerModel: 'llama3.2', // 默认路由模型
+    routerModel: 'llama3.2:1b', // 默认路由模型
   });
   
   const messagesEndRef = useRef<HTMLDivElement>(null);

@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
         }
         
         // 使用页面选择的模型，如果没有则使用环境变量默认值
-        const modelToUse = (embeddingModel || EMBEDDING_MODEL).split(':')[0]; // 去除 :latest 后缀
+        const modelToUse = embeddingModel || EMBEDDING_MODEL;
         
         const pipeline = new DocumentPipeline({
           chunkSize: chunkSize || 500,
@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
         }
         
         // 使用页面选择的模型，如果没有则使用环境变量默认值
-        const modelToUse = (embeddingModel || EMBEDDING_MODEL).split(':')[0]; // 去除 :latest 后缀
+        const modelToUse = embeddingModel || EMBEDDING_MODEL;
         
         const pipeline = new DocumentPipeline({
           chunkSize: chunkSize || 500,
@@ -115,7 +115,7 @@ export async function POST(request: NextRequest) {
         }
         
         // 使用页面选择的模型，如果没有则使用环境变量默认值
-        const modelToUse = (embeddingModel || EMBEDDING_MODEL).split(':')[0]; // 去除 :latest 后缀
+        const modelToUse = embeddingModel || EMBEDDING_MODEL;
         
         const pipeline = new DocumentPipeline({
           chunkSize: chunkSize || 500,
@@ -180,7 +180,7 @@ export async function POST(request: NextRequest) {
         }
         
         // 使用页面选择的模型，如果没有则使用环境变量默认值
-        const modelToUse = (embeddingModel || EMBEDDING_MODEL).split(':')[0]; // 去除 :latest 后缀
+        const modelToUse = embeddingModel || EMBEDDING_MODEL;
         
         const pipeline = new DocumentPipeline({
           chunkSize: chunkSize || 500,
