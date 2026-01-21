@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { MilvusVectorStore, MilvusConfig, getMilvusInstance, resetMilvusInstance } from '@/lib/milvus-client';
-import { OllamaEmbeddings } from '@langchain/ollama';
+import { MilvusVectorStore, MilvusConfig, getMilvusInstance, resetMilvusInstance, getModelDimension } from '@/lib/milvus-client';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  getEmbeddingModel,
+  selectModelForCollection,
+  vectorizeAndInsert,
+  DEFAULT_EMBEDDING_MODEL,
+  DocumentInput,
+} from '@/lib/vectorization-utils';
 
 // 环境变量配置
 const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
@@ -9,8 +15,7 @@ const MILVUS_USERNAME = process.env.MILVUS_USERNAME || '';
 const MILVUS_PASSWORD = process.env.MILVUS_PASSWORD || '';
 const MILVUS_DATABASE = process.env.MILVUS_DATABASE || 'default';
 const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
 
 // 默认配置
 const defaultConfig: MilvusConfig = {
@@ -23,83 +28,6 @@ const defaultConfig: MilvusConfig = {
   indexType: 'IVF_FLAT',
   metricType: 'COSINE',
 };
-
-// 模型维度映射
-const MODEL_DIMENSION_MAP: Record<string, number> = {
-  'nomic-embed-text': 768,
-  'mxbai-embed-large': 1024,
-  'bge-large': 1024,
-  'bge-m3': 1024,
-  'snowflake-arctic-embed': 1024,
-  'e5-large': 1024,
-  'gte-large': 1024,
-};
-
-// 根据模型名推断维度
-function getModelDimension(modelName: string): number {
-  const baseName = modelName.split(':')[0].toLowerCase().trim();
-  
-  console.log(`[getModelDimension] Input: "${modelName}", BaseName: "${baseName}"`);
-  
-  // 精确匹配
-  if (MODEL_DIMENSION_MAP[baseName]) {
-    console.log(`[getModelDimension] Exact match: ${baseName} → ${MODEL_DIMENSION_MAP[baseName]}D`);
-    return MODEL_DIMENSION_MAP[baseName];
-  }
-  
-  // 模糊匹配
-  for (const [name, dim] of Object.entries(MODEL_DIMENSION_MAP)) {
-    if (baseName.includes(name) || name.includes(baseName)) {
-      console.log(`[getModelDimension] Fuzzy match: "${baseName}" ↔ "${name}" → ${dim}D`);
-      return dim;
-    }
-  }
-  
-  // 根据名称模式推断（按优先级）
-  if (baseName.includes('bge-m3')) {
-    console.log(`[getModelDimension] Pattern: bge-m3 → 1024D`);
-    return 1024;
-  }
-  if (baseName.includes('bge') && (baseName.includes('large') || baseName.includes('base'))) {
-    console.log(`[getModelDimension] Pattern: bge-large/base → 1024D`);
-    return 1024;
-  }
-  if (baseName.includes('nomic') || baseName.includes('embed-text')) {
-    console.log(`[getModelDimension] Pattern: nomic → 768D`);
-    return 768;
-  }
-  if (baseName.includes('mxbai') || baseName.includes('snowflake')) {
-    console.log(`[getModelDimension] Pattern: mxbai/snowflake → 1024D`);
-    return 1024;
-  }
-  
-  console.warn(`[getModelDimension] No match for "${baseName}", defaulting to 768D`);
-  return 768; // 默认
-}
-
-// 根据维度选择合适的模型
-function selectModelByDimension(dimension: number, preferredModel?: string): string {
-  if (preferredModel) {
-    const modelDim = getModelDimension(preferredModel);
-    if (modelDim === dimension) {
-      return preferredModel; // 保留完整模型名称（包括版本标签）
-    }
-  }
-  
-  // 根据维度返回推荐模型
-  return dimension === 768 ? 'nomic-embed-text' : 'mxbai-embed-large';
-}
-
-// 获取 Embedding 模型
-function getEmbeddingModel(modelName?: string) {
-  const actualModelName = modelName || EMBEDDING_MODEL;
-  console.log(`[Milvus API] Creating embedding model: ${actualModelName}`);
-  
-  return new OllamaEmbeddings({
-    baseUrl: OLLAMA_BASE_URL,
-    model: actualModelName,
-  });
-}
 
 // POST: 执行 Milvus 操作
 export async function POST(request: NextRequest) {
@@ -262,7 +190,7 @@ export async function POST(request: NextRequest) {
         console.log(`[Milvus Search] Collection dimension: ${collectionDimension}D`);
 
         // 自动选择与集合维度匹配的模型
-        const actualModel = selectModelByDimension(collectionDimension, embeddingModel);
+        const actualModel = selectModelForCollection(collectionDimension, embeddingModel);
         console.log(`[Milvus Search] Auto-selected model: "${actualModel}"`);
         
         const embeddings = getEmbeddingModel(actualModel);
@@ -338,7 +266,7 @@ export async function POST(request: NextRequest) {
 
       // 从文件导入文档
       case 'import-files': {
-        const { files } = params;
+        const { files, embeddingModel: fileEmbeddingModel, chunkSize = 500, chunkOverlap = 50 } = params;
         
         if (!files || !Array.isArray(files) || files.length === 0) {
           return NextResponse.json({
@@ -348,45 +276,34 @@ export async function POST(request: NextRequest) {
         }
 
         const milvus = getMilvusInstance(defaultConfig);
-        await milvus.connect();
-        await milvus.initializeCollection();
-
-        const embeddings = getEmbeddingModel();
-        const { RecursiveCharacterTextSplitter } = await import('@langchain/textsplitters');
         
-        const splitter = new RecursiveCharacterTextSplitter({
-          chunkSize: 500,
-          chunkOverlap: 50,
+        // 转换为 DocumentInput 格式
+        const documents: DocumentInput[] = files.map((f: any) => ({
+          content: f.content,
+          filename: f.filename,
+        }));
+        
+        // 使用公共向量化工具
+        const result = await vectorizeAndInsert(milvus, documents, {
+          embeddingModel: fileEmbeddingModel || EMBEDDING_MODEL,
+          chunkSize,
+          chunkOverlap,
         });
-
-        const allDocs: any[] = [];
         
-        for (const file of files) {
-          const { content, filename } = file;
-          const chunks = await splitter.splitText(content);
-          
-          for (let i = 0; i < chunks.length; i++) {
-            const embedding = await embeddings.embedQuery(chunks[i]);
-            allDocs.push({
-              id: `${filename}-chunk-${i}-${uuidv4().slice(0, 8)}`,
-              content: chunks[i],
-              embedding,
-              metadata: {
-                source: filename,
-                chunkIndex: i,
-                totalChunks: chunks.length,
-              },
-            });
-          }
+        if (!result.success) {
+          return NextResponse.json({
+            success: false,
+            error: result.error,
+          }, { status: 400 });
         }
-
-        const ids = await milvus.insertDocuments(allDocs);
         
         return NextResponse.json({
           success: true,
-          message: `Imported ${files.length} files as ${ids.length} chunks`,
+          message: `Imported ${files.length} files as ${result.chunksInserted} chunks`,
           files: files.map((f: any) => f.filename),
-          chunkCount: ids.length,
+          chunkCount: result.chunksInserted,
+          embeddingModel: result.embeddingModel,
+          dimension: result.dimension,
         });
       }
 

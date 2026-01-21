@@ -115,23 +115,41 @@ export async function loadTextFile(content: string, filename: string): Promise<L
  * PDF 文件加载器
  */
 export async function loadPdfFile(buffer: Buffer, filename: string): Promise<LoadedDocument> {
+  console.log(`[Pipeline PDF] 开始加载: ${filename}, 大小: ${buffer.length} bytes`);
+  
   try {
-    // 动态导入 pdf-parse
-    const pdfParse = (await import('pdf-parse')).default;
-    const data = await pdfParse(buffer);
+    // 动态导入 pdf-parse v2.x
+    const { PDFParse } = await import('pdf-parse');
+    console.log('[Pipeline PDF] pdf-parse 模块加载成功');
+    
+    // 使用 v2 API
+    const parser = new PDFParse({ data: buffer });
+    console.log('[Pipeline PDF] PDFParse 实例创建成功');
+    
+    // 获取文本和文档信息
+    const textResult = await parser.getText();
+    console.log(`[Pipeline PDF] 文本提取成功, 长度: ${textResult.text.length}`);
+    
+    const infoResult = await parser.getInfo();
+    console.log(`[Pipeline PDF] 文档信息获取成功, 页数: ${infoResult.total}`);
+    
+    // 释放资源
+    await parser.destroy();
+    console.log('[Pipeline PDF] 资源已释放');
     
     return {
-      content: data.text.trim(),
+      content: textResult.text.trim(),
       metadata: {
         source: filename,
         type: 'pdf',
-        title: data.info?.Title || filename,
-        author: data.info?.Author,
-        createdAt: data.info?.CreationDate || new Date().toISOString(),
-        pageCount: data.numpages,
+        title: infoResult.info?.Title || filename,
+        author: infoResult.info?.Author,
+        createdAt: infoResult.info?.CreationDate || new Date().toISOString(),
+        pageCount: infoResult.total,
       }
     };
   } catch (error) {
+    console.error(`[Pipeline PDF] 解析失败:`, error);
     throw new Error(`PDF 解析失败: ${error instanceof Error ? error.message : String(error)}`);
   }
 }

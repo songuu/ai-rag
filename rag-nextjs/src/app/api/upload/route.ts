@@ -1,16 +1,50 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { 
   parseDocument, 
   isSupportedFile, 
   getSupportedTypesDescription,
-  SUPPORTED_EXTENSIONS 
+  SUPPORTED_EXTENSIONS,
+  getFileExtension
 } from '@/lib/document-parser';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
+const METADATA_FILE = path.join(UPLOAD_DIR, 'file-manifest.json');  // 文件清单
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// 文件清单项接口
+interface FileManifestItem {
+  id: string;
+  originalName: string;        // 原始文件名（用于展示）
+  originalExtension: string;   // 原始扩展名（用于展示图标）
+  storedFilename: string;      // 存储的原始文件名
+  parsedFilename: string;      // 解析后的文本文件名（用于 RAG）
+  size: number;
+  contentLength: number;
+  uploadedAt: string;
+  parseMethod: string;
+  pages?: number;
+}
+
+// 加载文件清单
+async function loadManifest(): Promise<Record<string, FileManifestItem>> {
+  try {
+    if (existsSync(METADATA_FILE)) {
+      const content = await readFile(METADATA_FILE, 'utf-8');
+      return JSON.parse(content);
+    }
+  } catch (error) {
+    console.error('加载文件清单失败:', error);
+  }
+  return {};
+}
+
+// 保存文件清单
+async function saveManifest(manifest: Record<string, FileManifestItem>): Promise<void> {
+  await writeFile(METADATA_FILE, JSON.stringify(manifest, null, 2), 'utf-8');
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -28,6 +62,9 @@ export async function POST(request: NextRequest) {
     if (!existsSync(UPLOAD_DIR)) {
       await mkdir(UPLOAD_DIR, { recursive: true });
     }
+
+    // 加载现有文件清单
+    const manifest = await loadManifest();
 
     const results = [];
     const errors = [];
@@ -67,27 +104,51 @@ export async function POST(request: NextRequest) {
           continue;
         }
 
-        // 生成安全的文件名（处理原始文件）
+        // 生成唯一 ID
         const timestamp = Date.now();
-        const safeFilename = `${timestamp}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-        const originalFilePath = path.join(UPLOAD_DIR, safeFilename);
+        const fileId = `${timestamp}_${Math.random().toString(36).substring(2, 8)}`;
+        const ext = getFileExtension(file.name);
+        const baseName = path.basename(file.name, ext);
         
-        // 保存原始文件
-        await writeFile(originalFilePath, buffer);
+        // 1. 保存原始文件（保持原始格式，用于下载/预览）
+        // 文件名格式: {timestamp}_{originalBaseName}{ext}
+        const storedFilename = `${timestamp}_${baseName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]/g, '_')}${ext}`;
+        const storedFilePath = path.join(UPLOAD_DIR, storedFilename);
+        await writeFile(storedFilePath, buffer);
+        console.log(`[Upload] 原始文件已保存: ${storedFilePath}`);
         
-        // 同时保存解析后的文本内容（.txt 格式）
-        const textFilename = `${timestamp}_${path.basename(file.name, path.extname(file.name))}_parsed.txt`;
-        const textFilePath = path.join(UPLOAD_DIR, textFilename);
-        await writeFile(textFilePath, parseResult.document.content, 'utf-8');
+        // 2. 保存解析后的文本内容（用于 RAG 向量化处理）
+        // 文件名格式: {timestamp}_{originalBaseName}_parsed.txt
+        const parsedFilename = `${timestamp}_${baseName.replace(/[^a-zA-Z0-9\u4e00-\u9fa5._-]/g, '_')}_parsed.txt`;
+        const parsedFilePath = path.join(UPLOAD_DIR, parsedFilename);
+        await writeFile(parsedFilePath, parseResult.document.content, 'utf-8');
+        console.log(`[Upload] 解析文本已保存: ${parsedFilePath} (用于 RAG)`);
+
+        // 3. 保存到文件清单
+        const manifestItem: FileManifestItem = {
+          id: fileId,
+          originalName: file.name,           // 原始文件名（展示用）
+          originalExtension: ext,            // 原始扩展名（图标用）
+          storedFilename,                    // 存储的原始文件
+          parsedFilename,                    // 解析后的文本文件（RAG用）
+          size: file.size,
+          contentLength: parseResult.document.content.length,
+          uploadedAt: new Date().toISOString(),
+          parseMethod: parseResult.document.metadata.parseMethod,
+          pages: parseResult.document.metadata.pages,
+        };
+        
+        manifest[fileId] = manifestItem;
 
         results.push({
+          id: fileId,
           filename: file.name,
-          savedAs: safeFilename,
-          textFile: textFilename,
+          extension: ext,
+          storedFilename,
+          parsedFilename,
           size: file.size,
           contentLength: parseResult.document.content.length,
           metadata: parseResult.document.metadata,
-          path: originalFilePath
         });
 
       } catch (error) {
@@ -98,6 +159,9 @@ export async function POST(request: NextRequest) {
         });
       }
     }
+
+    // 保存更新后的文件清单
+    await saveManifest(manifest);
 
     return NextResponse.json({
       success: true,

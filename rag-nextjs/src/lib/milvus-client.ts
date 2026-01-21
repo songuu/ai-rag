@@ -39,7 +39,7 @@ export interface MilvusSearchResult {
 export interface CollectionStats {
   name: string;
   rowCount: number;
-  embeddingDimension: number;
+  embeddingDimension: number | null;  // null 表示集合为空，可以使用任何维度的模型
   indexType: string;
   metricType: string;
   loaded: boolean;
@@ -560,27 +560,37 @@ export class MilvusVectorStore {
       const stats = await client.getCollectionStatistics({ collection_name: collectionName });
       const loadState = await client.getLoadState({ collection_name: collectionName });
       
+      const rowCount = parseInt(stats.data.row_count || '0');
+      
       // 从集合 schema 获取实际的向量维度
-      let actualDimension = this.config.embeddingDimension;
-      try {
-        const collectionInfo = await client.describeCollection({ collection_name: collectionName });
-        const embeddingField = collectionInfo.schema?.fields?.find(
-          (f: any) => f.name === 'embedding' && f.type_params
-        );
-        if (embeddingField?.type_params) {
-          const dimParam = embeddingField.type_params.find((p: any) => p.key === 'dim');
-          if (dimParam?.value) {
-            actualDimension = parseInt(dimParam.value);
-            console.log(`[Milvus] Actual collection dimension from schema: ${actualDimension}D`);
+      // 但如果集合为空（rowCount=0），返回 null 维度，表示可以使用任何模型
+      let actualDimension: number | null = null;
+      
+      if (rowCount > 0) {
+        // 只有当集合有数据时，维度才"锁定"
+        actualDimension = this.config.embeddingDimension;
+        try {
+          const collectionInfo = await client.describeCollection({ collection_name: collectionName });
+          const embeddingField = collectionInfo.schema?.fields?.find(
+            (f: any) => f.name === 'embedding' && f.type_params
+          );
+          if (embeddingField?.type_params) {
+            const dimParam = embeddingField.type_params.find((p: any) => p.key === 'dim');
+            if (dimParam?.value) {
+              actualDimension = parseInt(dimParam.value);
+              console.log(`[Milvus] Collection dimension locked at: ${actualDimension}D (${rowCount} rows)`);
+            }
           }
+        } catch (schemaError) {
+          console.warn('[Milvus] Could not get schema dimension, using config:', schemaError);
         }
-      } catch (schemaError) {
-        console.warn('[Milvus] Could not get schema dimension, using config:', schemaError);
+      } else {
+        console.log(`[Milvus] Collection is empty, dimension not locked (any embedding model allowed)`);
       }
 
       return {
         name: collectionName,
-        rowCount: parseInt(stats.data.row_count || '0'),
+        rowCount,
         embeddingDimension: actualDimension,
         indexType: this.config.indexType,
         metricType: this.config.metricType,

@@ -943,6 +943,12 @@ export default function HomePage() {
               <Link href="/milvus" className="p-2 text-violet-500 hover:text-violet-700 hover:bg-violet-50 rounded-lg transition-colors" title="Milvus">
                 <i className="fas fa-database"></i>
               </Link>
+              <Link href="/entity-extraction" className="p-2 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors" title="实体抽取">
+                <i className="fas fa-project-diagram"></i>
+              </Link>
+              <Link href="/adaptive-entity-rag" className="p-2 text-cyan-500 hover:text-cyan-700 hover:bg-cyan-50 rounded-lg transition-colors" title="自适应实体路由 RAG">
+                <i className="fas fa-route"></i>
+              </Link>
               <div className="w-px h-6 bg-gray-200 mx-1"></div>
               <button
                 onClick={handleDeleteAllConversations}
@@ -1180,7 +1186,7 @@ export default function HomePage() {
                 <span className="text-lg">🚀</span>
                 高级 RAG 模式
               </h3>
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <Link
                   href="/reasoning-rag"
                   className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-purple-200 hover:border-purple-400 hover:shadow-md transition-all"
@@ -1210,6 +1216,26 @@ export default function HomePage() {
                   </div>
                   <span className="text-xs font-medium text-gray-700">Agentic</span>
                   <span className="text-[9px] text-gray-500">代理工作流</span>
+                </Link>
+                <Link
+                  href="/entity-extraction"
+                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-rose-200 hover:border-rose-400 hover:shadow-md transition-all"
+                >
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-rose-500 to-orange-500 flex items-center justify-center text-white text-base group-hover:scale-110 transition-transform">
+                    🕸️
+                  </div>
+                  <span className="text-xs font-medium text-gray-700">GraphRAG</span>
+                  <span className="text-[9px] text-gray-500">实体抽取</span>
+                </Link>
+                <Link
+                  href="/adaptive-entity-rag"
+                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-cyan-200 hover:border-cyan-400 hover:shadow-md transition-all col-span-2"
+                >
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white text-base group-hover:scale-110 transition-transform">
+                    🛤️
+                  </div>
+                  <span className="text-xs font-medium text-gray-700">Adaptive Entity RAG</span>
+                  <span className="text-[9px] text-gray-500">自适应实体路由</span>
                 </Link>
               </div>
               <p className="text-[10px] text-gray-500 mt-3 text-center">

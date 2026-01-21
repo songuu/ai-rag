@@ -3,9 +3,16 @@
 import React from 'react';
 
 interface FileInfo {
+  id?: string;
   name: string;
+  extension?: string;  // 原始文件扩展名
   size: number;
+  contentLength?: number;  // 解析后文本长度
   modified: string;
+  parseMethod?: string;
+  pages?: number;
+  _storedFilename?: string;   // 存储的原始文件名（内部用）
+  _parsedFilename?: string;   // 解析后的文件名（内部用）
 }
 
 interface FileListProps {
@@ -16,17 +23,17 @@ interface FileListProps {
 }
 
 // 文件类型图标和颜色映射
-const FILE_TYPE_MAP: Record<string, { icon: string; color: string; bg: string }> = {
-  '.pdf': { icon: 'fa-file-pdf', color: 'text-red-500', bg: 'bg-red-50' },
-  '.xlsx': { icon: 'fa-file-excel', color: 'text-green-600', bg: 'bg-green-50' },
-  '.xls': { icon: 'fa-file-excel', color: 'text-green-600', bg: 'bg-green-50' },
-  '.csv': { icon: 'fa-file-csv', color: 'text-green-500', bg: 'bg-green-50' },
-  '.docx': { icon: 'fa-file-word', color: 'text-blue-600', bg: 'bg-blue-50' },
-  '.doc': { icon: 'fa-file-word', color: 'text-blue-600', bg: 'bg-blue-50' },
-  '.md': { icon: 'fa-file-code', color: 'text-purple-500', bg: 'bg-purple-50' },
-  '.markdown': { icon: 'fa-file-code', color: 'text-purple-500', bg: 'bg-purple-50' },
-  '.json': { icon: 'fa-file-code', color: 'text-yellow-600', bg: 'bg-yellow-50' },
-  '.txt': { icon: 'fa-file-alt', color: 'text-gray-500', bg: 'bg-gray-50' },
+const FILE_TYPE_MAP: Record<string, { icon: string; color: string; bg: string; label: string }> = {
+  '.pdf': { icon: 'fa-file-pdf', color: 'text-red-500', bg: 'bg-red-50', label: 'PDF' },
+  '.xlsx': { icon: 'fa-file-excel', color: 'text-green-600', bg: 'bg-green-50', label: 'Excel' },
+  '.xls': { icon: 'fa-file-excel', color: 'text-green-600', bg: 'bg-green-50', label: 'Excel' },
+  '.csv': { icon: 'fa-file-csv', color: 'text-green-500', bg: 'bg-green-50', label: 'CSV' },
+  '.docx': { icon: 'fa-file-word', color: 'text-blue-600', bg: 'bg-blue-50', label: 'Word' },
+  '.doc': { icon: 'fa-file-word', color: 'text-blue-600', bg: 'bg-blue-50', label: 'Word' },
+  '.md': { icon: 'fa-file-code', color: 'text-purple-500', bg: 'bg-purple-50', label: 'MD' },
+  '.markdown': { icon: 'fa-file-code', color: 'text-purple-500', bg: 'bg-purple-50', label: 'MD' },
+  '.json': { icon: 'fa-file-code', color: 'text-yellow-600', bg: 'bg-yellow-50', label: 'JSON' },
+  '.txt': { icon: 'fa-file-alt', color: 'text-gray-500', bg: 'bg-gray-50', label: 'TXT' },
 };
 
 function getFileExtension(filename: string): string {
@@ -35,32 +42,21 @@ function getFileExtension(filename: string): string {
   return filename.slice(lastDot).toLowerCase();
 }
 
-function getFileTypeInfo(filename: string) {
-  const ext = getFileExtension(filename);
-  return FILE_TYPE_MAP[ext] || { icon: 'fa-file', color: 'text-gray-400', bg: 'bg-gray-50' };
+function getFileTypeInfo(file: FileInfo) {
+  // 优先使用 extension 字段（新版本），否则从文件名提取
+  const ext = file.extension || getFileExtension(file.name);
+  return FILE_TYPE_MAP[ext] || { icon: 'fa-file', color: 'text-gray-400', bg: 'bg-gray-50', label: '文件' };
 }
 
-function getFileTypeLabel(filename: string): string {
-  const ext = getFileExtension(filename);
-  const labels: Record<string, string> = {
-    '.pdf': 'PDF',
-    '.xlsx': 'Excel',
-    '.xls': 'Excel',
-    '.csv': 'CSV',
-    '.docx': 'Word',
-    '.doc': 'Word',
-    '.md': 'MD',
-    '.markdown': 'MD',
-    '.json': 'JSON',
-    '.txt': 'TXT',
-  };
-  return labels[ext] || ext.slice(1).toUpperCase() || '文件';
+function getFileTypeLabel(file: FileInfo): string {
+  const ext = file.extension || getFileExtension(file.name);
+  return FILE_TYPE_MAP[ext]?.label || ext.slice(1).toUpperCase() || '文件';
 }
 
 export default function FileList({ files, onRefresh, onDelete, formatFileSize }: FileListProps) {
   // 按文件类型分组统计
   const fileStats = files.reduce((acc, file) => {
-    const label = getFileTypeLabel(file.name);
+    const label = getFileTypeLabel(file);
     if (!acc[label]) {
       acc[label] = { count: 0, size: 0 };
     }
@@ -114,12 +110,14 @@ export default function FileList({ files, onRefresh, onDelete, formatFileSize }:
             {/* 文件列表 */}
             <div className="space-y-2 max-h-[400px] overflow-y-auto">
               {files.map((file, index) => {
-                const typeInfo = getFileTypeInfo(file.name);
-                const typeLabel = getFileTypeLabel(file.name);
+                const typeInfo = getFileTypeInfo(file);
+                const typeLabel = getFileTypeLabel(file);
+                // 用于删除的标识符：优先使用 id，否则使用文件名
+                const deleteKey = file.id || file.name;
                 
                 return (
                   <div 
-                    key={index} 
+                    key={file.id || index} 
                     className={`flex items-center justify-between p-3 rounded-lg ${typeInfo.bg} hover:shadow-sm transition-all group`}
                   >
                     <div className="flex items-center min-w-0 flex-1">
@@ -137,11 +135,23 @@ export default function FileList({ files, onRefresh, onDelete, formatFileSize }:
                           <span className="text-xs text-gray-500">
                             {formatFileSize(file.size)}
                           </span>
+                          {file.pages && (
+                            <span className="text-xs text-gray-400">
+                              {file.pages} 页
+                            </span>
+                          )}
+                          {file.contentLength && (
+                            <span className="text-xs text-gray-400" title="解析后文本长度">
+                              {file.contentLength > 1000 
+                                ? `${(file.contentLength / 1000).toFixed(1)}K 字符` 
+                                : `${file.contentLength} 字符`}
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
                     <button
-                      onClick={() => onDelete(file.name)}
+                      onClick={() => onDelete(deleteKey)}
                       className="ml-2 p-2 text-gray-400 hover:text-red-600 hover:bg-white rounded-lg opacity-0 group-hover:opacity-100 transition-all"
                       title="删除文件"
                     >
