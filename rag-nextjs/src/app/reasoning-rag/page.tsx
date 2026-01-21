@@ -7,7 +7,46 @@ import ThinkingProcessCollapsible from '@/components/ThinkingProcessCollapsible'
 import ReasoningFileManager from '@/components/ReasoningFileManager';
 import { reasoningDB, type ReasoningConversation, type ReasoningMessage, type ThinkingStep } from '@/lib/reasoning-indexeddb';
 
+// ==================== 常量定义 ====================
+
+/** 车道名称映射 */
+const LANE_NAMES: Record<number, string> = {
+  1: '极速车道',
+  2: '标准车道',
+  3: '推理车道',
+};
+
+/** 车道颜色映射 */
+const LANE_COLORS: Record<number, { bg: string; text: string; border: string; dot: string }> = {
+  1: { bg: 'bg-green-900/30', text: 'text-green-300', border: 'border-green-500/30', dot: 'bg-green-500' },
+  2: { bg: 'bg-blue-900/30', text: 'text-blue-300', border: 'border-blue-500/30', dot: 'bg-blue-500' },
+  3: { bg: 'bg-purple-900/30', text: 'text-purple-300', border: 'border-purple-500/30', dot: 'bg-purple-500' },
+};
+
+/** 获取车道名称 */
+const getLaneName = (lane: number): string => LANE_NAMES[lane] || '未知车道';
+
+/** 获取车道颜色配置 */
+const getLaneColors = (lane: number) => LANE_COLORS[lane] || LANE_COLORS[3];
+
 // ==================== 类型定义 ====================
+
+/** 检索结果项 */
+interface RetrievalResult {
+  id: string;
+  content: string;
+  score: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** 意图分类结果 */
+interface IntentClassification {
+  intent: string;
+  confidence: number;
+  reasoning: string;
+  suggestedLane: number;
+  estimatedTime?: string;
+}
 
 interface ReasoningRAGResponse {
   query: string;
@@ -18,10 +57,10 @@ interface ReasoningRAGResponse {
     content: string;
   }>;
   retrieval?: {
-    denseResults: any[];
-    sparseResults: any[];
-    mergedResults: any[];
-    rerankedResults: any[];
+    denseResults: RetrievalResult[];
+    sparseResults: RetrievalResult[];
+    mergedResults: RetrievalResult[];
+    rerankedResults: RetrievalResult[];
     statistics: {
       denseCount: number;
       sparseCount: number;
@@ -107,6 +146,22 @@ interface Config {
   enableRouting: boolean;  // 启用意图路由
   routerModel: string;     // 路由模型
 }
+
+/** 默认配置 */
+const DEFAULT_CONFIG: Config = {
+  fastModel: 'qwen2.5:0.5b',
+  reasoningModel: 'deepseek-r1:7b',
+  embeddingModel: 'nomic-embed-text',
+  topK: 50,
+  rerankTopK: 5,
+  similarityThreshold: 0.3,
+  enableBM25: true,
+  enableRerank: true,
+  temperature: 0.7,
+  thinkingTimeout: 120,
+  enableRouting: true,
+  routerModel: 'llama3.2:1b',
+};
 
 // ==================== 配置面板组件 ====================
 
@@ -221,33 +276,6 @@ const ConfigPanel: React.FC<{
               </>
             )}
           </div>
-          
-          {/* 快速模型选择 (Lane 1 & 2) */}
-          {/* <div>
-            <label className="text-sm font-medium text-blue-300 mb-2 block">
-              ⚡ 快速模型 (Lane 1 & 2)
-            </label>
-            {llmModels.length === 0 ? (
-              <div className="p-2 bg-amber-900/20 border border-amber-500/20 rounded-lg text-xs text-amber-300">
-                未检测到 LLM 模型，请安装: ollama pull llama3.2
-              </div>
-            ) : (
-              <select
-                value={config.fastModel}
-                onChange={e => onChange({ ...config, fastModel: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              >
-                {llmModels.map(model => (
-                  <option key={model.id} value={model.id}>
-                    {model.displayName || model.name} {model.sizeFormatted ? `(${model.sizeFormatted})` : ''}
-                  </option>
-                ))}
-              </select>
-            )}
-            <p className="mt-1 text-xs text-gray-500">
-              用于闲聊和简单 RAG 问答，响应速度快
-            </p>
-          </div> */}
           
           {/* 向量模型选择 */}
           <div>
@@ -500,26 +528,14 @@ export default function ReasoningRAGPage() {
     isRouting: boolean;
     currentLane?: number;
     laneName?: string;
-    classification?: any;
+    classification?: IntentClassification;
   }>({ isRouting: false });
   
-  const [config, setConfig] = useState<Config>({
-    fastModel: 'qwen2.5:0.5b',       // Lane 1 & 2 快速模型
-    reasoningModel: 'deepseek-r1:7b', // Lane 3 推理模型
-    embeddingModel: 'nomic-embed-text',
-    topK: 50,
-    rerankTopK: 5,
-    similarityThreshold: 0.3,
-    enableBM25: true,
-    enableRerank: true,
-    temperature: 0.7,
-    thinkingTimeout: 120, // 默认 120 秒
-    enableRouting: true,  // 默认启用意图路由
-    routerModel: 'llama3.2:1b', // 默认路由模型
-  });
+  const [config, setConfig] = useState<Config>(DEFAULT_CONFIG);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   
   // 模型加载状态
   const [modelLoadError, setModelLoadError] = useState<string | null>(null);
@@ -580,7 +596,7 @@ export default function ReasoningRAGPage() {
       
       // 处理 LLM 模型 (快速模型)
       if (ollamaData.success && ollamaData.llmModels) {
-        const fastModels = ollamaData.llmModels.map((m: any) => ({
+        const fastModels = ollamaData.llmModels.map((m: { name: string; displayName?: string; sizeFormatted?: string }) => ({
           id: m.name,
           name: m.name,
           displayName: m.displayName || m.name.split(':')[0],
@@ -602,7 +618,7 @@ export default function ReasoningRAGPage() {
       
       // 处理 embedding 模型
       if (ollamaData.success && ollamaData.embeddingModels) {
-        const embedModels = ollamaData.embeddingModels.map((m: any) => ({
+        const embedModels = ollamaData.embeddingModels.map((m: { name: string; displayName?: string; sizeFormatted?: string; dimension?: number }) => ({
           id: m.name,
           name: m.name,
           displayName: m.displayName || m.name.split(':')[0],
@@ -636,6 +652,13 @@ export default function ReasoningRAGPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, streamingAnswer, streamingThinking]);
+  
+  // 组件卸载时取消正在进行的请求
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
   
   // 保存消息到 IndexedDB
   const saveMessage = useCallback(async (message: ReasoningMessage) => {
@@ -690,6 +713,10 @@ export default function ReasoningRAGPage() {
     });
     
     try {
+      // 取消之前的请求
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = new AbortController();
+      
       // 使用流式 API
       const response = await fetch('/api/reasoning-rag/stream', {
         method: 'POST',
@@ -700,7 +727,8 @@ export default function ReasoningRAGPage() {
             ...config,
             thinkingTimeout: config.thinkingTimeout * 1000 // 转换为毫秒
           }
-        })
+        }),
+        signal: abortControllerRef.current.signal
       });
       
       if (!response.ok) {
@@ -714,8 +742,8 @@ export default function ReasoningRAGPage() {
       let buffer = '';
       let finalAnswer = '';
       let finalThinking: ThinkingStep[] = [];
-      let finalWorkflow: any = null;
-      let finalRouting: any = null;
+      let finalWorkflow: ReasoningRAGResponse['workflow'] | null = null;
+      let finalRouting: IntentClassification | null = null;
       
       while (true) {
         const { done, value } = await reader.read();
@@ -733,11 +761,11 @@ export default function ReasoningRAGPage() {
               switch (event.type) {
                 case 'routing':
                   if (event.data.status === 'complete' && event.data.classification) {
+                    const lane = event.data.classification.suggestedLane;
                     setRoutingStatus({
                       isRouting: false,
-                      currentLane: event.data.classification.suggestedLane,
-                      laneName: event.data.classification.suggestedLane === 1 ? '极速车道' :
-                                event.data.classification.suggestedLane === 2 ? '标准车道' : '推理车道',
+                      currentLane: lane,
+                      laneName: getLaneName(lane),
                       classification: event.data.classification
                     });
                     finalRouting = event.data.classification;
@@ -795,12 +823,19 @@ export default function ReasoningRAGPage() {
       }
       
       // 创建最终响应
+      const defaultWorkflow: ReasoningRAGResponse['workflow'] = {
+        totalDuration: 0,
+        iterations: 1,
+        decisionPath: [],
+        nodeExecutions: []
+      };
+      
       const result: ReasoningRAGResponse = {
         query: trimmedInput,
         answer: finalAnswer,
         thinkingProcess: finalThinking,
         messages: [],
-        workflow: finalWorkflow || { totalDuration: 0, iterations: 1, decisionPath: [], nodeExecutions: [] },
+        workflow: finalWorkflow ?? defaultWorkflow,
         config: {
           reasoningModel: config.reasoningModel,
           embeddingModel: config.embeddingModel,
@@ -822,13 +857,12 @@ export default function ReasoningRAGPage() {
         thinkingProcess: finalThinking,
         thinkingDuration: finalWorkflow?.totalDuration,
         routing: finalRouting ? {
-          lane: finalRouting.suggestedLane,
-          laneName: finalRouting.suggestedLane === 1 ? '极速车道' :
-                    finalRouting.suggestedLane === 2 ? '标准车道' : '推理车道',
+          lane: finalRouting.suggestedLane as 1 | 2 | 3,
+          laneName: getLaneName(finalRouting.suggestedLane),
           intent: finalRouting.intent,
           confidence: finalRouting.confidence,
           reasoning: finalRouting.reasoning,
-          estimatedTime: finalRouting.estimatedTime
+          estimatedTime: finalRouting.estimatedTime || ''
         } : undefined
       };
       
@@ -842,10 +876,16 @@ export default function ReasoningRAGPage() {
         timestamp: assistantMessage.timestamp,
         thinkingProcess: finalThinking,
         thinkingDuration: finalWorkflow?.totalDuration,
-        workflowInfo: finalWorkflow
+        workflowInfo: finalWorkflow ?? undefined
       });
       
     } catch (error) {
+      // 忽略取消请求的错误
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[ReasoningRAG] 请求已取消');
+        return;
+      }
+      
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
         type: 'assistant',
@@ -857,6 +897,7 @@ export default function ReasoningRAGPage() {
       setStreamingAnswer('');
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
   };
   
@@ -1196,21 +1237,15 @@ export default function ReasoningRAGPage() {
                           )}
                           
                           {/* 车道标签 */}
-                          {msg.routing && (
-                            <div className={`mb-1 px-2 py-1 rounded-lg inline-flex items-center gap-1.5 text-xs ${
-                              msg.routing.lane === 1 
-                                ? 'bg-green-900/30 text-green-300 border border-green-500/30' 
-                                : msg.routing.lane === 2 
-                                  ? 'bg-blue-900/30 text-blue-300 border border-blue-500/30'
-                                  : 'bg-purple-900/30 text-purple-300 border border-purple-500/30'
-                            }`}>
-                              <span className={`w-1.5 h-1.5 rounded-full ${
-                                msg.routing.lane === 1 ? 'bg-green-500' :
-                                msg.routing.lane === 2 ? 'bg-blue-500' : 'bg-purple-500'
-                              }`} />
-                              <span>Lane {msg.routing.lane}: {msg.routing.laneName}</span>
-                            </div>
-                          )}
+                          {msg.routing && (() => {
+                            const colors = getLaneColors(msg.routing.lane);
+                            return (
+                              <div className={`mb-1 px-2 py-1 rounded-lg inline-flex items-center gap-1.5 text-xs border ${colors.bg} ${colors.text} ${colors.border}`}>
+                                <span className={`w-1.5 h-1.5 rounded-full ${colors.dot}`} />
+                                <span>Lane {msg.routing.lane}: {msg.routing.laneName}</span>
+                              </div>
+                            );
+                          })()}
                           
                           {/* 回答内容 */}
                           <div className="rounded-2xl px-4 py-3 bg-slate-800 text-gray-300 border border-slate-700">
@@ -1246,33 +1281,24 @@ export default function ReasoningRAGPage() {
                           <span className="text-sm text-purple-300">正在分析查询意图...</span>
                         </div>
                       </div>
-                    ) : routingStatus.currentLane && (
-                      <div className={`mb-2 px-3 py-2 rounded-lg w-full border ${
-                        routingStatus.currentLane === 1 
-                          ? 'bg-green-900/30 border-green-500/30' 
-                          : routingStatus.currentLane === 2 
-                            ? 'bg-blue-900/30 border-blue-500/30'
-                            : 'bg-purple-900/30 border-purple-500/30'
-                      }`}>
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${
-                            routingStatus.currentLane === 1 ? 'bg-green-500' :
-                            routingStatus.currentLane === 2 ? 'bg-blue-500' : 'bg-purple-500'
-                          }`} />
-                          <span className={`text-sm font-medium ${
-                            routingStatus.currentLane === 1 ? 'text-green-300' :
-                            routingStatus.currentLane === 2 ? 'text-blue-300' : 'text-purple-300'
-                          }`}>
-                            Lane {routingStatus.currentLane}: {routingStatus.laneName}
-                          </span>
-                          {routingStatus.classification && (
-                            <span className="text-xs text-gray-500 ml-auto">
-                              {routingStatus.classification.estimatedTime}
+                    ) : routingStatus.currentLane && (() => {
+                      const colors = getLaneColors(routingStatus.currentLane);
+                      return (
+                        <div className={`mb-2 px-3 py-2 rounded-lg w-full border ${colors.bg} ${colors.border}`}>
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${colors.dot}`} />
+                            <span className={`text-sm font-medium ${colors.text}`}>
+                              Lane {routingStatus.currentLane}: {routingStatus.laneName}
                             </span>
-                          )}
+                            {routingStatus.classification && (
+                              <span className="text-xs text-gray-500 ml-auto">
+                                {routingStatus.classification.estimatedTime}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                     
                     {/* 实时思考过程 */}
                     <ThinkingProcessCollapsible
