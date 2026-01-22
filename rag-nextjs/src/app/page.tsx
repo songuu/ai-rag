@@ -1145,6 +1145,9 @@ export default function HomePage() {
               <Link href="/adaptive-entity-rag" className="p-2 text-cyan-500 hover:text-cyan-700 hover:bg-cyan-50 rounded-lg transition-colors" title="自适应实体路由 RAG">
                 <i className="fas fa-route"></i>
               </Link>
+              <Link href="/context-management" className="p-2 text-amber-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors" title="上下文管理">
+                <i className="fas fa-layer-group"></i>
+              </Link>
               <div className="w-px h-6 bg-gray-200 mx-1"></div>
               <button
                 onClick={handleDeleteAllConversations}
@@ -1442,13 +1445,23 @@ export default function HomePage() {
                 </Link>
                 <Link
                   href="/adaptive-entity-rag"
-                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-cyan-200 hover:border-cyan-400 hover:shadow-md transition-all col-span-2"
+                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-cyan-200 hover:border-cyan-400 hover:shadow-md transition-all"
                 >
                   <div className="w-9 h-9 rounded-full bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-white text-base group-hover:scale-110 transition-transform">
                     🛤️
                   </div>
-                  <span className="text-xs font-medium text-gray-700">Adaptive Entity RAG</span>
-                  <span className="text-[9px] text-gray-500">自适应实体路由</span>
+                  <span className="text-xs font-medium text-gray-700">Entity RAG</span>
+                  <span className="text-[9px] text-gray-500">实体路由</span>
+                </Link>
+                <Link
+                  href="/context-management"
+                  className="group flex flex-col items-center gap-1.5 p-2.5 bg-white rounded-lg border border-amber-200 hover:border-amber-400 hover:shadow-md transition-all"
+                >
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center text-white text-base group-hover:scale-110 transition-transform">
+                    📚
+                  </div>
+                  <span className="text-xs font-medium text-gray-700">Context</span>
+                  <span className="text-[9px] text-gray-500">上下文管理</span>
                 </Link>
               </div>
               <p className="text-[10px] text-gray-500 mt-3 text-center">
