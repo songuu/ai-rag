@@ -156,66 +156,57 @@ const ENTITY_EXTRACTION_PROMPT = `你是一个专业的认知解析引擎，负�
 
 用户查询: {query}
 
+## 重要规则
+1. **只提取查询中实际出现的实体**，不要凭空捏造或添加不存在的实体
+2. **如果查询是问候语、闲聊或不包含任何实体，entities数组必须为空[]**
+3. **实体必须是查询中明确提到的名词或专有名词**
+
 ## 任务说明
 请深入分析用户查询，提取以下结构化信息：
 
-1. **实体提取**：识别查询中的所有命名实体（人名、组织、地点、产品、日期、事件、概念等）
-2. **逻辑关系**：识别实体之间的逻辑运算关系（AND并且、OR或者、NOT排除）
+1. **实体提取**：只识别查询中实际存在的命名实体
+2. **逻辑关系**：如果有多个实体，识别它们之间的逻辑关系
 3. **意图分类**：判断用户查询的根本目的
 4. **复杂度评估**：评估查询的处理难度
 
 ## 返回格式（严格JSON）
 {
-  "entities": [
-    {
-      "name": "规范化的实体名称",
-      "type": "PERSON|ORGANIZATION|LOCATION|PRODUCT|DATE|EVENT|CONCEPT|OTHER",
-      "value": "用户原始输入的值",
-      "confidence": 0.85
-    }
-  ],
-  "logicalRelations": [
-    {
-      "operator": "AND|OR|NOT",
-      "entities": ["实体1", "实体2"],
-      "description": "关系的自然语言描述"
-    }
-  ],
+  "entities": [],
+  "logicalRelations": [],
   "intent": "factual|conceptual|comparison|procedural|exploratory",
   "complexity": "simple|moderate|complex",
   "confidence": 0.85,
-  "keywords": ["核心关键词1", "核心关键词2"]
+  "keywords": []
 }
 
 ## 实体类型定义
-- **PERSON**: 人名、角色、职位（如：马斯克、产品经理）
-- **ORGANIZATION**: 组织、公司、团队、机构（如：特斯拉、OpenAI）
-- **LOCATION**: 地理位置、地点、区域（如：北京、硅谷）
-- **PRODUCT**: 产品、品牌、型号（如：iPhone 15、Model S）
-- **DATE**: 时间点、时间段、年份（如：2024年、去年）
-- **EVENT**: 事件、活动、发布会（如：WWDC、双十一）
-- **CONCEPT**: 概念、术语、技术名词（如：RAG、向量检索）
-- **OTHER**: 其他无法分类的实体
+- **PERSON**: 人名、角色名称
+- **ORGANIZATION**: 组织名、公司名、机构名
+- **LOCATION**: 地名、地点名称
+- **PRODUCT**: 产品名、品牌名
+- **DATE**: 具体时间、日期
+- **EVENT**: 事件名称
+- **CONCEPT**: 专业术语、技术概念
+- **OTHER**: 其他实体
 
 ## 意图类型定义
-- **factual**: 寻求具体事实或数据（谁/什么/哪里/何时）
-- **conceptual**: 理解概念或原理（为什么/什么意思/如何理解）
-- **comparison**: 对比分析多个对象（A和B哪个好/区别是什么）
-- **procedural**: 寻求操作步骤或方法（怎么做/如何实现）
-- **exploratory**: 开放式探索或发现（有什么/还有哪些）
+- **factual**: 寻求具体事实或数据
+- **conceptual**: 理解概念或原理
+- **comparison**: 对比分析
+- **procedural**: 寻求方法步骤
+- **exploratory**: 开放式探索
 
-## 逻辑关系识别示例
-- "北京和上海的房价" → AND关系：[北京, 上海]
-- "苹果或华为的手机" → OR关系：[苹果, 华为]
-- "不包括进口的汽车" → NOT关系：[进口]
-- "iPhone 15在北京的价格" → 暗含AND：[iPhone 15, 北京]
+## 特殊情况处理
+- 问候语（如"你好"、"早上好"）：entities=[], intent="exploratory", complexity="simple"
+- 简单疑问（如"什么是AI"）：提取"AI"作为CONCEPT实体
+- 无实体查询：entities=[], 只提取keywords
 
-## 复杂度评估标准
-- **simple**: 单一实体、直接问答
-- **moderate**: 2-3个实体、需要简单推理
-- **complex**: 多实体、多关系、需要复杂推理或跨领域知识
+## 复杂度评估
+- **simple**: 无实体或单一实体
+- **moderate**: 2-3个实体
+- **complex**: 多实体、复杂关系
 
-请只返回严格的JSON格式，不要添加任何其他解释文字。`;
+请只返回严格的JSON格式，不要添加任何其他解释文字。不要输出示例中的内容，只提取用户查询中实际出现的实体。`;
 
 const ENTITY_RESOLUTION_PROMPT = `你是一个实体校验专家。请判断用户输入的实体是否与标准实体库中的实体匹配。
 
@@ -404,6 +395,20 @@ export class CognitiveParser {
    * 解析用户查询，提取实体和逻辑关系
    */
   async parse(query: string): Promise<ParsedQuery> {
+    // 快速路径：检测问候语/闲聊，直接返回空实体
+    if (this.isGreetingOrSmallTalk(query)) {
+      console.log(`[CognitiveParser] 检测到问候语/闲聊: "${query}"`);
+      return {
+        originalQuery: query,
+        entities: [],
+        logicalRelations: [],
+        intent: 'exploratory',
+        complexity: 'simple',
+        confidence: 0.95,
+        keywords: [],
+      };
+    }
+
     const capability = this.getModelCapabilityLevel();
     
     // 对于低能力模型，使用预处理增强
@@ -433,6 +438,9 @@ export class CognitiveParser {
         confidence: parseFloat(e.confidence) || 0.8,
       }));
 
+      // 验证实体：确保实体名称确实出现在原始查询中
+      entities = this.validateEntitiesAgainstQuery(entities, query, normalizedQuery);
+
       // 对于低能力模型，应用后处理校验
       if (capability === 'low') {
         entities = EntityPreprocessor.postprocess(entities, preMappedEntities);
@@ -452,6 +460,65 @@ export class CognitiveParser {
       // 降级处理：基于规则提取
       return this.fallbackParse(query, preMappedEntities);
     }
+  }
+
+  /**
+   * 检测是否为问候语或闲聊
+   */
+  private isGreetingOrSmallTalk(query: string): boolean {
+    const greetings = [
+      // 问候语
+      '你好', '您好', 'hello', 'hi', '嗨', '哈喽', '早上好', '下午好', '晚上好',
+      '早安', '午安', '晚安', 'good morning', 'good afternoon', 'good evening',
+      // 闲聊
+      '在吗', '在不在', '有人吗', '请问在吗',
+      // 感谢
+      '谢谢', '感谢', '多谢', 'thanks', 'thank you',
+      // 告别
+      '再见', '拜拜', 'bye', 'goodbye',
+    ];
+    
+    const normalized = query.toLowerCase().trim();
+    
+    // 完全匹配
+    if (greetings.some(g => normalized === g.toLowerCase())) {
+      return true;
+    }
+    
+    // 短查询且包含问候词
+    if (normalized.length <= 10 && greetings.some(g => normalized.includes(g.toLowerCase()))) {
+      return true;
+    }
+    
+    return false;
+  }
+
+  /**
+   * 验证实体是否确实出现在查询中，过滤掉幻觉实体
+   */
+  private validateEntitiesAgainstQuery(
+    entities: ExtractedEntity[], 
+    originalQuery: string,
+    normalizedQuery: string
+  ): ExtractedEntity[] {
+    const queryLower = originalQuery.toLowerCase();
+    const normalizedLower = normalizedQuery.toLowerCase();
+    
+    return entities.filter(entity => {
+      const nameLower = entity.name.toLowerCase();
+      const valueLower = (entity.value || '').toLowerCase();
+      
+      // 检查实体名称或值是否出现在查询中
+      const inOriginal = queryLower.includes(nameLower) || queryLower.includes(valueLower);
+      const inNormalized = normalizedLower.includes(nameLower) || normalizedLower.includes(valueLower);
+      
+      if (!inOriginal && !inNormalized) {
+        console.log(`[CognitiveParser] 过滤幻觉实体: "${entity.name}" (不在查询中)`);
+        return false;
+      }
+      
+      return true;
+    });
   }
 
   private normalizeEntityType(type: string): EntityType {
