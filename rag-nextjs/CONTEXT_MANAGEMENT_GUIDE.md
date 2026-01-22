@@ -1,19 +1,5 @@
 # 上下文管理系统架构指南
 
-## Context Management System for LangGraph + RAG
-
-> 基于 **LangGraph 官方 API** 的生产级上下文管理架构，使用 StateGraph、Annotation、MemorySaver 和 trimMessages 等官方组件。
-
-| 组件 | 旧实现 | 新实现 (官方 API) |
-|------|--------|------------------|
-| 状态定义 | 自定义 interface | `Annotation.Root()` |
-| 检查点 | 自定义 Checkpointer 类 | `MemorySaver` |
-| 消息截断 | 自定义 WindowManager | `trimMessages()` |
-| 工作流 | 手动节点调用 | `StateGraph` + `addNode` + `addEdge` |
-| 节点常量 | 自定义字符串 | `START` / `END` |
-
----
-
 ## 一、系统概述
 
 ### 1.1 核心挑战
@@ -68,7 +54,7 @@
 │          ▼                              │                                       │
 │   ┌──────────────┐                      │                                       │
 │   │ 3. 查询改写器 │  指代消解            │                                       │
-│   │ Query Rewriter│  "它" → "华为Mate60" │                                       │
+│   │ Query Rewriter│  "它" → "上下文中的它" │                                       │
 │   └──────┬───────┘                      │                                       │
 │          │                              │                                       │
 │          ▼                              ▼                                       │

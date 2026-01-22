@@ -179,7 +179,8 @@ const AgentStateAnnotation = Annotation.Root({
   originalQuery: Annotation<string>({ reducer: (_, b) => b, default: () => '' }),
   processedQuery: Annotation<string>({ reducer: (_, b) => b, default: () => '' }),
   topK: Annotation<number>({ reducer: (_, b) => b, default: () => 5 }),
-  similarityThreshold: Annotation<number>({ reducer: (_, b) => b, default: () => 0.3 }),
+  // 注意：COSINE 相似度的分数通常较低，0.1-0.3 就算比较相关了
+  similarityThreshold: Annotation<number>({ reducer: (_, b) => b, default: () => 0.1 }),
   maxRetries: Annotation<number>({ reducer: (_, b) => b, default: () => 2 }),
   
   queryAnalysis: Annotation<QueryAnalysis | undefined>({ reducer: (_, b) => b }),
@@ -637,33 +638,43 @@ export class AgenticRAGSystem {
     const processedWeight = 1 - originalWeight;
     const contentMap = new Map<string, RetrievedDocument>();
     
+    // 安全的分数获取函数
+    const safeScore = (score: number | undefined): number => {
+      if (score === undefined || score === null || isNaN(score)) return 0;
+      return score;
+    };
+    
     // 添加原始查询结果
     for (const doc of originalResults) {
       const key = doc.content.substring(0, 200); // 使用内容前200字符作为唯一标识
+      const docScore = safeScore(doc.score);
       const existing = contentMap.get(key);
       if (existing) {
-        // 如果已存在，更新分数（加权平均）
-        existing.score = Math.max(existing.score, doc.score * originalWeight);
+        // 如果已存在，更新分数（取最大值）
+        existing.score = Math.max(safeScore(existing.score), docScore * originalWeight);
       } else {
-        contentMap.set(key, { ...doc, score: doc.score * originalWeight });
+        contentMap.set(key, { ...doc, score: docScore * originalWeight });
       }
     }
     
     // 添加处理后查询结果
     for (const doc of processedResults) {
       const key = doc.content.substring(0, 200);
+      const docScore = safeScore(doc.score);
       const existing = contentMap.get(key);
       if (existing) {
         // 如果已存在，融合分数
-        existing.score = (existing.score + doc.score * processedWeight) / 2;
+        const existingScore = safeScore(existing.score);
+        existing.score = (existingScore + docScore * processedWeight) / 2;
         existing.metadata.querySource = 'both';
       } else {
-        contentMap.set(key, { ...doc, score: doc.score * processedWeight });
+        contentMap.set(key, { ...doc, score: docScore * processedWeight });
       }
     }
     
-    // 按分数排序返回
+    // 按分数排序返回，确保分数不是 NaN
     return Array.from(contentMap.values())
+      .map(doc => ({ ...doc, score: safeScore(doc.score) }))
       .sort((a, b) => b.score - a.score);
   }
 
@@ -761,15 +772,15 @@ recommendation 说明:
         factualScore: selfReflection.documentScores[i]?.factuality || 0.5,
       }));
 
-      // 决定是否需要重试
-      const shouldRewrite = selfReflection.recommendation === 'rewrite' && state.retryCount < state.maxRetries;
+      // 注意：self_reflect 后直接进入 evaluate_quality，不会触发重写循环
+      // 这里记录自省建议但不修改 shouldRewrite 和 retryCount，避免影响主循环
+      const selfReflectRecommendation = selfReflection.recommendation;
 
       const stepEnd = Date.now();
       return {
         retrievedDocuments: updatedDocs,
         selfReflection,
-        shouldRewrite,
-        retryCount: shouldRewrite ? state.retryCount + 1 : state.retryCount,
+        // 不修改 shouldRewrite 和 retryCount，因为 self_reflect 后面没有条件边处理这些
         currentStep: 'reflected',
         workflowSteps: [{
           step: stepName,
@@ -799,8 +810,19 @@ recommendation 说明:
     const stepStart = Date.now();
     const stepName = '检索评估';
 
+    // 硬性限制：防止无限循环
+    const HARD_RETRY_LIMIT = 10;
+    const effectiveMaxRetries = Math.min(state.maxRetries || 2, HARD_RETRY_LIMIT);
+
     if (state.retrievedDocuments.length === 0) {
-      trace('grade_retrieval_empty', { reason: '没有检索结果' });
+      trace('grade_retrieval_empty', { reason: '没有检索结果', retryCount: state.retryCount });
+      
+      // 关键修复：即使没有检索结果，也要递增 retryCount
+      const canRetry = state.retryCount < effectiveMaxRetries;
+      const newRetryCount = canRetry ? state.retryCount + 1 : state.retryCount;
+      
+      console.log(`[Agentic RAG] 检索评估 - 无结果, retryCount: ${state.retryCount} -> ${newRetryCount}, canRetry: ${canRetry}`);
+      
       return {
         retrievalGrade: {
           isRelevant: false,
@@ -808,17 +830,18 @@ recommendation 说明:
           keywordMatchScore: 0,
           semanticScore: 0,
           hasAnswerSignals: false,
-          reasoning: '没有检索到任何文档',
+          reasoning: `没有检索到任何文档${canRetry ? '，将重试' : '，已达最大重试次数'}`,
           documentGrades: [],
         },
-        shouldRewrite: state.retryCount < state.maxRetries,
+        shouldRewrite: canRetry,
+        retryCount: newRetryCount,  // 关键：必须递增 retryCount
         currentStep: 'graded',
         workflowSteps: [{
           step: stepName,
           status: 'completed',
           startTime: stepStart,
           endTime: Date.now(),
-          output: { isRelevant: false, reason: 'no_results' },
+          output: { isRelevant: false, reason: 'no_results', retryCount: newRetryCount },
         }],
       };
     }
@@ -885,8 +908,10 @@ recommendation 说明:
       const overallScore = avgKeywordScore * 0.35 + avgSemanticScore * 0.5 + (hasAnswerSignals ? 0.15 : 0);
       const isRelevant = overallScore >= (state.gradePassThreshold || 0.5);
       
-      // 决定是否需要重写查询
-      const shouldRewrite = !isRelevant && state.retryCount < state.maxRetries;
+      // 决定是否需要重写查询（使用 effectiveMaxRetries 确保硬性限制）
+      const canRetry = state.retryCount < effectiveMaxRetries;
+      const shouldRewrite = !isRelevant && canRetry;
+      const newRetryCount = shouldRewrite ? state.retryCount + 1 : state.retryCount;
 
       const retrievalGrade: RetrievalGradeResult = {
         isRelevant,
@@ -907,16 +932,17 @@ recommendation 说明:
         avgSemanticScore,
         hasAnswerSignals,
         shouldRewrite,
+        retryCount: newRetryCount,
         relevantDocCount: documentGrades.filter(d => d.isRelevant).length,
       });
 
-      console.log(`[Agentic RAG] 检索评估结果: ${isRelevant ? '✅ 通过' : '❌ 未通过'} (评分: ${(overallScore * 100).toFixed(1)}%)`);
+      console.log(`[Agentic RAG] 检索评估结果: ${isRelevant ? '✅ 通过' : '❌ 未通过'} (评分: ${(overallScore * 100).toFixed(1)}%, retryCount: ${state.retryCount} -> ${newRetryCount})`);
 
       const stepEnd = Date.now();
       return {
         retrievalGrade,
         shouldRewrite,
-        retryCount: shouldRewrite ? state.retryCount + 1 : state.retryCount,
+        retryCount: newRetryCount,
         currentStep: 'graded',
         workflowSteps: [{
           step: stepName,
@@ -1090,19 +1116,23 @@ recommendation 说明:
         : '没有找到相关文档。';
 
       const prompt = ChatPromptTemplate.fromTemplate(`
-你是一个专业的知识库助手。请根据下方提供的上下文信息来回答用户的问题。
+你是一个专业的知识库助手。你的任务是根据检索到的文档来回答用户的问题。
 
-【上下文信息】：
+【检索到的文档】：
 {context}
 
 【用户问题】：
 {question}
 
-回答要求：
-1. 如果上下文信息中不包含答案，请明确说明"根据现有知识库，我无法找到相关信息"
-2. 不要编造不在上下文中的信息
-3. 回答要简洁明了，使用中文
-4. 如果可能，引用文档来源
+【重要指示】：
+1. 你必须基于上面提供的文档内容来回答，即使内容看起来不完全相关
+2. 如果用户只提供了一个关键词（如公司名、产品名），请总结文档中关于该主题的主要信息
+3. 如果文档包含数据（如财务数据、统计数据），请提取并呈现这些数据
+4. 回答要具体，引用文档中的实际数据和信息
+5. 只有当文档与问题完全无关时（如用户问A，文档全是关于B的），才说"未找到相关信息"
+6. 使用中文回答
+
+请基于以上文档回答用户的问题：
 `);
 
       const chain = prompt.pipe(this.llm).pipe(new StringOutputParser());
@@ -1363,20 +1393,31 @@ recommendation 说明:
       // 检索评估后：根据评分决定下一步
       .addConditionalEdges('grade_retrieval', (state) => {
         const grade = state.retrievalGrade;
+        
+        // 硬性安全限制
+        const HARD_RETRY_LIMIT = 3;
+        const effectiveMaxRetries = Math.min(state.maxRetries || 2, HARD_RETRY_LIMIT);
+        
+        console.log(`[Agentic RAG] 条件边检查: retryCount=${state.retryCount}, maxRetries=${state.maxRetries}, effectiveMax=${effectiveMaxRetries}, shouldRewrite=${state.shouldRewrite}, isRelevant=${grade?.isRelevant}`);
+        
         trace('edge_after_grade', { 
           isRelevant: grade?.isRelevant, 
           score: grade?.score,
           shouldRewrite: state.shouldRewrite,
           retryCount: state.retryCount,
           maxRetries: state.maxRetries,
+          effectiveMaxRetries,
         });
         
-        // 如果评分不通过且未超过重试次数，重写查询
-        if (!grade?.isRelevant && state.shouldRewrite && state.retryCount <= state.maxRetries) {
-          console.log(`[Agentic RAG] 检索评估未通过，重写查询 (重试 ${state.retryCount}/${state.maxRetries})`);
+        // 如果评分不通过且 shouldRewrite 为 true 且 retryCount 未超过限制，重写查询
+        // 注意：gradeRetrieval 已经递增了 retryCount，所以这里用 < 检查是否还能继续
+        // 但为了安全，我们再次检查 retryCount < effectiveMaxRetries
+        if (!grade?.isRelevant && state.shouldRewrite && state.retryCount < effectiveMaxRetries) {
+          console.log(`[Agentic RAG] 检索评估未通过，重写查询 (已重试 ${state.retryCount}/${effectiveMaxRetries} 次)`);
           return 'rewrite_query';
         }
         
+        console.log(`[Agentic RAG] 进入 self_reflect (isRelevant=${grade?.isRelevant}, retryCount=${state.retryCount} >= ${effectiveMaxRetries} 或 shouldRewrite=${state.shouldRewrite})`);
         // 否则进入自省评分（深度评估）
         return 'self_reflect';
       })
@@ -1419,9 +1460,10 @@ recommendation 说明:
       originalQuery: question,        // 透传原始问题
       processedQuery: question,       // 初始与原始相同
       topK: options.topK || 5,
-      similarityThreshold: options.similarityThreshold || 0.3,
+      // 注意：COSINE 相似度分数通常较低，0.1 是合理的默认阈值
+      similarityThreshold: options.similarityThreshold || 0.1,
       maxRetries: options.maxRetries || 2,
-      gradePassThreshold: options.gradePassThreshold || 0.5,  // 检索评分通过阈值
+      gradePassThreshold: options.gradePassThreshold || 0.3,  // 降低检索评分通过阈值
       retrievedDocuments: [],
       originalQueryResults: [],
       processedQueryResults: [],
@@ -1437,9 +1479,14 @@ recommendation 说明:
 
     try {
       console.log(`[Agentic RAG] 开始查询: "${question}"`);
-      console.log(`[Agentic RAG] 配置: topK=${initialState.topK}, threshold=${initialState.similarityThreshold}, maxRetries=${initialState.maxRetries}`);
+      console.log(`[Agentic RAG] 配置: topK=${initialState.topK}, threshold=${initialState.similarityThreshold}, gradeThreshold=${initialState.gradePassThreshold}, maxRetries=${initialState.maxRetries}`);
       
-      const result = await this.graph.invoke(initialState);
+      // 设置递归限制作为最后的安全保障
+      // 正常流程：analyze(1) + retrieve(1) + grade(1) + [rewrite(1) + retrieve(1) + grade(1)] * maxRetries + self_reflect(1) + evaluate(1) + generate(1) + hallucination(1) + finalize(1)
+      // 最坏情况：约 3 + 3 * maxRetries 个节点，设置 50 作为安全余量
+      const recursionLimit = 50;
+      
+      const result = await this.graph.invoke(initialState, { recursionLimit });
       
       trace('query_complete', {
         answer: result.answer?.substring(0, 100),
@@ -1476,9 +1523,9 @@ recommendation 说明:
       originalQuery: question,
       processedQuery: question,
       topK: options.topK || 5,
-      similarityThreshold: options.similarityThreshold || 0.3,
+      similarityThreshold: options.similarityThreshold || 0.1,
       maxRetries: options.maxRetries || 2,
-      gradePassThreshold: options.gradePassThreshold || 0.5,
+      gradePassThreshold: options.gradePassThreshold || 0.3,
       retrievedDocuments: [],
       originalQueryResults: [],
       processedQueryResults: [],
@@ -1493,7 +1540,10 @@ recommendation 说明:
     };
 
     try {
-      for await (const chunk of await this.graph.stream(initialState)) {
+      // 设置递归限制
+      const recursionLimit = 50;
+      
+      for await (const chunk of await this.graph.stream(initialState, { recursionLimit })) {
         yield chunk;
       }
     } catch (error) {

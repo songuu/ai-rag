@@ -3,14 +3,40 @@
 /**
  * 上下文管理系统 (Context Management System)
  * 
- * 自定义实现，不依赖 LangGraph 复杂组件：
- * - 文件持久化存储会话
- * - 自定义窗口管理
- * - 自定义查询改写
+ * 完全基于原生 LangChain 组件实现：
+ * - BaseMessage (HumanMessage, AIMessage, SystemMessage) - 消息类型
+ * - ChatPromptTemplate, MessagesPlaceholder - 提示模板
+ * - StringOutputParser - 输出解析
+ * - RunnableSequence, RunnableLambda, RunnablePassthrough, RunnableBranch - 链式调用
+ * - trimMessages - 消息截断
+ * - Document - 文档类型
+ * - ChatOllama, OllamaEmbeddings - Ollama 模型
  */
 
 import { ChatOllama } from '@langchain/ollama';
 import { OllamaEmbeddings } from '@langchain/ollama';
+import { 
+  HumanMessage, 
+  AIMessage, 
+  SystemMessage, 
+  BaseMessage,
+  trimMessages,
+  getBufferString,
+} from '@langchain/core/messages';
+import { 
+  ChatPromptTemplate, 
+  MessagesPlaceholder,
+  PromptTemplate,
+} from '@langchain/core/prompts';
+import { StringOutputParser } from '@langchain/core/output_parsers';
+import { 
+  RunnableSequence, 
+  RunnableLambda, 
+  RunnablePassthrough,
+  RunnableBranch,
+  RunnableConfig,
+} from '@langchain/core/runnables';
+import { Document } from '@langchain/core/documents';
 import { getMilvusInstance, getModelDimension, selectModelByDimension } from './milvus-client';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -109,16 +135,33 @@ const DEFAULT_CONFIG: ContextManagerConfig = {
   topK: 5,
 };
 
-// ==================== 工具函数 ====================
+// ==================== Token 计数器 (用于 trimMessages) ====================
 
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-}
-
+/**
+ * 估算文本的 Token 数量
+ * 支持中英文混合文本
+ */
 function estimateTokens(text: string): number {
   const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
   const otherChars = text.length - chineseChars;
   return Math.ceil(chineseChars / 1.5 + otherChars / 4);
+}
+
+/**
+ * LangChain 兼容的 Token 计数器
+ * 用于 trimMessages 函数
+ */
+async function tokenCounter(messages: BaseMessage[]): Promise<number> {
+  return messages.reduce((sum, msg) => {
+    const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+    return sum + estimateTokens(content);
+  }, 0);
+}
+
+// ==================== 工具函数 ====================
+
+function generateId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 }
 
 function createStep(name: string): WorkflowStep {
@@ -132,6 +175,57 @@ function completeStep(step: WorkflowStep, details?: Record<string, any>): Workfl
     endTime: Date.now(),
     duration: Date.now() - (step.startTime || Date.now()),
     details,
+  };
+}
+
+// ==================== 消息转换工具 (LangChain BaseMessage) ====================
+
+/**
+ * 将自定义消息格式转换为 LangChain BaseMessage
+ */
+function toBaseMessages(messages: ConversationMessage[]): BaseMessage[] {
+  return messages.map(msg => {
+    switch (msg.role) {
+      case 'user':
+        return new HumanMessage({ content: msg.content, id: msg.id });
+      case 'assistant':
+        return new AIMessage({ content: msg.content, id: msg.id });
+      case 'system':
+        return new SystemMessage({ content: msg.content, id: msg.id });
+      default:
+        return new HumanMessage({ content: msg.content, id: msg.id });
+    }
+  });
+}
+
+/**
+ * 将 LangChain BaseMessage 转换为自定义消息格式
+ */
+function fromBaseMessage(msg: BaseMessage, timestamp: number): ConversationMessage {
+  let role: MessageRole = 'user';
+  if (msg._getType() === 'ai') role = 'assistant';
+  else if (msg._getType() === 'system') role = 'system';
+  
+  const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+  
+  return {
+    id: (msg.id as string) || `${timestamp}-${role}`,
+    role,
+    content,
+    timestamp,
+    tokenCount: estimateTokens(content),
+  };
+}
+
+/**
+ * 将 Document 转换为 RetrievedDocument
+ */
+function fromDocument(doc: Document, score: number): RetrievedDocument {
+  return {
+    id: (doc.metadata?.id as string) || generateId(),
+    content: doc.pageContent,
+    score,
+    metadata: doc.metadata,
   };
 }
 
@@ -161,7 +255,6 @@ function loadSession(sessionId: string): SessionData | null {
   
   try {
     const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    
     if (raw.metadata?.sessionId) {
       return { metadata: raw.metadata, messages: raw.messages || [], summary: raw.summary };
     } else if (raw.sessionId) {
@@ -173,7 +266,7 @@ function loadSession(sessionId: string): SessionData | null {
   }
 }
 
-function listSessions(): SessionMetadata[] {
+function listAllSessions(): SessionMetadata[] {
   ensureDataDir();
   const fullPath = path.join(process.cwd(), DATA_DIR);
   const sessions: SessionMetadata[] = [];
@@ -191,7 +284,7 @@ function listSessions(): SessionMetadata[] {
   return sessions.sort((a, b) => (b.lastActiveAt || 0) - (a.lastActiveAt || 0));
 }
 
-function deleteSession(sessionId: string): boolean {
+function deleteSessionFile(sessionId: string): boolean {
   const filePath = getFilePath(sessionId);
   if (fs.existsSync(filePath)) {
     fs.unlinkSync(filePath);
@@ -200,119 +293,375 @@ function deleteSession(sessionId: string): boolean {
   return false;
 }
 
-// ==================== 窗口管理器 ====================
+// ==================== 窗口管理器 (使用 LangChain trimMessages) ====================
 
-class WindowManager {
-  constructor(private config: WindowConfig) {}
-  
-  trim(messages: ConversationMessage[]): { messages: ConversationMessage[]; trimmedCount: number } {
-    let result = [...messages];
-    const originalCount = result.length;
-    
-    // 1. 滑动窗口
-    const maxRounds = this.config.maxRounds || 10;
-    const maxMessages = maxRounds * 2;
-    if (result.length > maxMessages) {
-      const systemMsgs = this.config.preserveSystemPrompt 
-        ? result.filter(m => m.role === 'system') 
-        : [];
-      const nonSystemMsgs = result.filter(m => m.role !== 'system').slice(-maxMessages);
-      result = [...systemMsgs, ...nonSystemMsgs];
-    }
-    
-    // 2. Token 限制
-    if (this.config.strategy === 'token_limit' || this.config.strategy === 'hybrid') {
-      const maxTokens = this.config.maxTokens || 4000;
-      let totalTokens = 0;
-      const kept: ConversationMessage[] = [];
-      
-      // 从最新的开始保留
-      for (let i = result.length - 1; i >= 0; i--) {
-        const msg = result[i];
-        const tokens = msg.tokenCount || estimateTokens(msg.content);
-        if (totalTokens + tokens <= maxTokens || msg.role === 'system') {
-          kept.unshift(msg);
-          totalTokens += tokens;
-        }
-      }
-      result = kept;
-    }
-    
-    return { messages: result, trimmedCount: originalCount - result.length };
+/**
+ * 使用 LangChain 原生 trimMessages 进行消息截断
+ */
+async function trimMessagesWithLangChain(
+  messages: BaseMessage[],
+  maxTokens: number,
+  strategy: 'last' | 'first' = 'last'
+): Promise<BaseMessage[]> {
+  try {
+    // 使用 LangChain 的 trimMessages 函数
+    const trimmed = await trimMessages(messages, {
+      maxTokens,
+      tokenCounter,
+      strategy,
+      includeSystem: true,
+      allowPartial: false,
+      startOn: 'human',
+    });
+    return trimmed;
+  } catch (error) {
+    console.error('[trimMessages] Error:', error);
+    // 降级到简单截断
+    return messages.slice(-Math.floor(maxTokens / 100));
   }
 }
 
-// ==================== 查询改写器 ====================
-
-class QueryRewriter {
-  constructor(private llm: ChatOllama) {}
+/**
+ * 对 ConversationMessage 进行窗口截断
+ * 内部使用 LangChain trimMessages
+ */
+async function trimConversationMessages(
+  messages: ConversationMessage[],
+  config: WindowConfig
+): Promise<{ messages: ConversationMessage[]; trimmedCount: number }> {
+  const originalCount = messages.length;
   
-  async rewrite(query: string, history: ConversationMessage[]): Promise<{
-    rewrittenQuery: string;
-    needsRewrite: boolean;
-    reason: string;
-  }> {
-    // 无历史，不改写
-    if (history.length === 0) {
-      return { rewrittenQuery: query, needsRewrite: false, reason: '首轮对话' };
+  // 转换为 BaseMessage
+  const baseMessages = toBaseMessages(messages);
+  
+  // 1. 滑动窗口策略
+  let result = baseMessages;
+  const maxRounds = config.maxRounds || 10;
+  const maxMessages = maxRounds * 2;
+  
+  if (result.length > maxMessages) {
+    const systemMsgs = config.preserveSystemPrompt 
+      ? result.filter(m => m._getType() === 'system')
+      : [];
+    const nonSystemMsgs = result.filter(m => m._getType() !== 'system').slice(-maxMessages);
+    result = [...systemMsgs, ...nonSystemMsgs];
+  }
+  
+  // 2. Token 限制策略 (使用 LangChain trimMessages)
+  if (config.strategy === 'token_limit' || config.strategy === 'hybrid') {
+    const maxTokens = config.maxTokens || 4000;
+    result = await trimMessagesWithLangChain(result, maxTokens, 'last');
+  }
+  
+  // 转换回 ConversationMessage
+  const now = Date.now();
+  const trimmedMessages = result.map((msg, i) => fromBaseMessage(msg, now + i));
+  
+  return {
+    messages: trimmedMessages,
+    trimmedCount: originalCount - trimmedMessages.length,
+  };
+}
+
+// ==================== 查询改写器 (使用 LangChain RunnableSequence) ====================
+
+interface RewriteResult {
+  rewrittenQuery: string;
+  needsRewrite: boolean;
+  reason: string;
+}
+
+/**
+ * 创建查询改写链 (使用 LangChain 原生组件)
+ */
+function createRewriteChain(llm: ChatOllama): RunnableSequence<{ history: string; query: string }, string> {
+  const rewritePrompt = ChatPromptTemplate.fromMessages([
+    ['system', `你是一个查询改写助手。将用户问题改写为独立完整的问题。
+
+规则：
+1. 只补全代词（它、这、那、他、她）和省略的主语
+2. 不要添加无关内容
+3. 如果问题已完整，原样返回
+4. 只输出改写后的问题`],
+    ['human', `对话历史:
+{history}
+
+当前问题: {query}
+
+改写后:`],
+  ]);
+  
+  return RunnableSequence.from([
+    rewritePrompt,
+    llm,
+    new StringOutputParser(),
+  ]);
+}
+
+/**
+ * 检测话题切换
+ */
+function detectTopicSwitch(query: string, history: ConversationMessage[]): boolean {
+  // 检测苹果双关
+  if (query.includes('苹果')) {
+    const isFruit = /好吃|味道|水果|哪里的|产地|新鲜|红富士|青苹果/.test(query);
+    const historyHasApple = history.some(m => /iPhone|iPad|Mac|苹果手机|iOS/.test(m.content));
+    if (isFruit && historyHasApple) return true;
+  }
+  
+  // 检测明确的话题切换词
+  return /换个话题|另外问|说点别的|不说这个了/.test(query);
+}
+
+/**
+ * 检查是否需要改写
+ */
+function needsRewrite(query: string): boolean {
+  const hasPronouns = /^(它|这|那|他|她|前面|上面|上个|刚才)/.test(query);
+  const isShort = query.length < 6;
+  const hasQuestion = /吗|呢|？|\?$/.test(query);
+  return hasPronouns || isShort || (hasQuestion && query.length < 15);
+}
+
+/**
+ * 执行查询改写
+ */
+async function rewriteQuery(
+  query: string,
+  history: ConversationMessage[],
+  chain: RunnableSequence<{ history: string; query: string }, string>
+): Promise<RewriteResult> {
+  // 无历史，不改写
+  if (history.length === 0) {
+    return { rewrittenQuery: query, needsRewrite: false, reason: '首轮对话' };
+  }
+  
+  // 检测话题切换
+  if (detectTopicSwitch(query, history)) {
+    return { rewrittenQuery: query, needsRewrite: false, reason: '新话题' };
+  }
+  
+  // 检查是否需要改写
+  if (!needsRewrite(query) && query.length > 10) {
+    return { rewrittenQuery: query, needsRewrite: false, reason: '查询完整' };
+  }
+  
+  // 构建历史文本 (使用 getBufferString 获取格式化的历史)
+  const baseMessages = toBaseMessages(history.slice(-6));
+  const historyText = getBufferString(baseMessages, 'User', 'AI');
+  
+  try {
+    const rewritten = await chain.invoke({ history: historyText, query });
+    const trimmed = rewritten.trim();
+    
+    // 验证改写结果
+    if (trimmed.length > query.length * 3) {
+      return { rewrittenQuery: query, needsRewrite: false, reason: '改写过长' };
     }
     
-    // 检测话题切换
-    if (this.isNewTopic(query, history)) {
-      return { rewrittenQuery: query, needsRewrite: false, reason: '新话题' };
+    const originalKeywords = query.match(/[\u4e00-\u9fff]{2,}/g) || [];
+    const hasOriginalContent = originalKeywords.length === 0 || 
+      originalKeywords.some(kw => trimmed.includes(kw));
+    
+    if (!hasOriginalContent) {
+      return { rewrittenQuery: query, needsRewrite: false, reason: '改写无效' };
     }
     
-    // 检查是否需要改写
-    const hasPronouns = /^(它|这|那|他|她|前面|上面)/.test(query);
-    const isShort = query.length < 6;
+    return {
+      rewrittenQuery: trimmed,
+      needsRewrite: trimmed !== query,
+      reason: '已改写',
+    };
+  } catch (error) {
+    console.error('[rewriteQuery] Error:', error);
+    return { rewrittenQuery: query, needsRewrite: false, reason: '改写失败' };
+  }
+}
+
+// ==================== 响应生成器 (使用 LangChain RunnableBranch) ====================
+
+interface GenerateInput {
+  query: string;
+  rewrittenQuery: string;
+  history: BaseMessage[];
+  context: string;
+  isGreeting: boolean;
+}
+
+/**
+ * 创建响应生成链 (使用 RunnableBranch 实现条件分支)
+ */
+function createGenerateChain(llm: ChatOllama): RunnableSequence<GenerateInput, string> {
+  // 问候语提示模板
+  const greetingPrompt = ChatPromptTemplate.fromMessages([
+    ['system', '你是一个友好的智能助手。请自然地回应用户的问候或问题。保持简洁友好。'],
+    new MessagesPlaceholder('history'),
+    ['human', '{query}'],
+  ]);
+  
+  // 知识问答提示模板
+  const qaPrompt = ChatPromptTemplate.fromMessages([
+    ['system', `你是一个智能助手。请根据参考资料回答用户问题。
+
+要求：
+1. 如果参考资料中有相关信息，基于资料回答
+2. 如果参考资料中没有相关信息，尝试用你的知识回答，但要说明这不是来自资料库
+3. 保持回答简洁友好
+4. 不要编造不存在的信息
+
+参考资料：
+{context}`],
+    new MessagesPlaceholder('history'),
+    ['human', '{query}'],
+  ]);
+  
+  // 问候语链
+  const greetingChain = RunnableSequence.from([
+    RunnableLambda.from((input: GenerateInput) => ({
+      history: input.history,
+      query: input.query,
+    })),
+    greetingPrompt,
+    llm,
+    new StringOutputParser(),
+  ]);
+  
+  // 问答链
+  const qaChain = RunnableSequence.from([
+    RunnableLambda.from((input: GenerateInput) => ({
+      history: input.history,
+      query: input.rewrittenQuery !== input.query 
+        ? `${input.query}（理解为：${input.rewrittenQuery}）`
+        : input.query,
+      context: input.context,
+    })),
+    qaPrompt,
+    llm,
+    new StringOutputParser(),
+  ]);
+  
+  // 使用 RunnableBranch 实现条件分支
+  const branchChain = RunnableBranch.from([
+    [(input: GenerateInput) => input.isGreeting, greetingChain],
+    qaChain, // 默认分支
+  ]);
+  
+  return branchChain as unknown as RunnableSequence<GenerateInput, string>;
+}
+
+/**
+ * 检测是否为问候语
+ */
+function isGreeting(query: string): boolean {
+  const greetings = [
+    /^(你好|您好|hi|hello|hey|嗨|哈喽)/i,
+    /^(早上好|下午好|晚上好|早安|晚安)/,
+    /^(你是谁|你叫什么|介绍一下你自己)/,
+    /^(谢谢|感谢|多谢|辛苦了)/,
+    /^(再见|拜拜|bye)/i,
+  ];
+  return greetings.some(p => p.test(query.trim()));
+}
+
+// ==================== 摘要生成链 (使用 LangChain 组件) ====================
+
+/**
+ * 创建摘要生成链
+ */
+function createSummaryChain(llm: ChatOllama): RunnableSequence<{ conversation: string }, string> {
+  const summaryPrompt = ChatPromptTemplate.fromMessages([
+    ['system', '你是一个摘要助手。请将以下对话压缩为100-200字的摘要，保留关键信息和主要话题。'],
+    ['human', '{conversation}'],
+  ]);
+  
+  return RunnableSequence.from([
+    summaryPrompt,
+    llm,
+    new StringOutputParser(),
+  ]);
+}
+
+// ==================== 向量检索 (使用 LangChain Embeddings) ====================
+
+/**
+ * 执行向量检索
+ */
+async function retrieveDocuments(
+  query: string,
+  embeddings: OllamaEmbeddings,
+  collection: string,
+  embeddingModel: string,
+  topK: number,
+  threshold: number
+): Promise<RetrievedDocument[]> {
+  try {
+    let dimension = getModelDimension(embeddingModel);
+    let actualEmbeddings = embeddings;
     
-    if (!hasPronouns && !isShort && query.length > 10) {
-      return { rewrittenQuery: query, needsRewrite: false, reason: '查询完整' };
-    }
+    const milvus = getMilvusInstance({
+      collectionName: collection,
+      embeddingDimension: dimension,
+    });
     
-    // 构建历史
-    const recentHistory = history.slice(-6).map(m => 
-      `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`
-    ).join('\n');
-    
-    const prompt = `将用户问题改写为独立完整的问题。只补全代词和省略，不要添加无关内容。
-如果问题已完整，原样返回。
-
-对话历史:
-${recentHistory}
-
-当前问题: ${query}
-
-改写后的问题（只输出问题本身）:`;
-
+    // 自动适配维度
     try {
-      const response = await this.llm.invoke(prompt);
-      const rewritten = response.content.toString().trim();
-      
-      // 验证改写结果
-      if (rewritten.length > query.length * 3 || !rewritten.includes(query.slice(0, 2))) {
-        return { rewrittenQuery: query, needsRewrite: false, reason: '改写无效' };
+      await milvus.connect();
+      const stats = await milvus.getCollectionStats();
+      if (stats?.embeddingDimension && stats.embeddingDimension !== dimension) {
+        const model = selectModelByDimension(stats.embeddingDimension);
+        actualEmbeddings = new OllamaEmbeddings({ model });
       }
-      
-      return {
-        rewrittenQuery: rewritten,
-        needsRewrite: rewritten !== query,
-        reason: '已改写',
-      };
-    } catch {
-      return { rewrittenQuery: query, needsRewrite: false, reason: '改写失败' };
-    }
+    } catch { /* use default */ }
+    
+    // 使用 LangChain embeddings 生成查询向量
+    const queryEmbedding = await actualEmbeddings.embedQuery(query);
+    const results = await milvus.search(queryEmbedding, topK, threshold);
+    
+    return results.map(r => ({
+      id: r.id || generateId(),
+      content: r.content,
+      score: r.score,
+      metadata: r.metadata,
+    }));
+  } catch (error) {
+    console.error('[retrieveDocuments] Error:', error);
+    return [];
+  }
+}
+
+/**
+ * 相关性过滤
+ */
+function filterRelevantDocuments(docs: RetrievedDocument[], query: string): RetrievedDocument[] {
+  if (docs.length === 0) return [];
+  
+  // 提取关键词
+  const patterns = [
+    /(?:华为|苹果|小米|三星)[A-Za-z0-9\u4e00-\u9fff]+/g,
+    /(?:iPhone|iPad|MacBook|Mate|Galaxy)[A-Za-z0-9\s]*/gi,
+    /版本|价格|配置|参数|续航|屏幕/g,
+  ];
+  
+  const keywords: string[] = [];
+  for (const p of patterns) {
+    const m = query.match(p);
+    if (m) keywords.push(...m);
   }
   
-  private isNewTopic(query: string, history: ConversationMessage[]): boolean {
-    // 检查苹果双关
-    if (query.includes('苹果')) {
-      const isFruit = /好吃|味道|水果|哪里的|产地/.test(query);
-      const historyHasApple = history.some(m => /iPhone|iPad|苹果手机/.test(m.content));
-      if (isFruit && historyHasApple) return true;
-    }
-    return false;
+  const chinese = query.match(/[\u4e00-\u9fff]{2,6}/g);
+  if (chinese) {
+    const stops = ['什么', '怎么', '如何', '为什么', '哪个', '那个', '这个', '可以', '能够'];
+    keywords.push(...chinese.filter(w => !stops.includes(w)));
   }
+  
+  const uniqueKeywords = [...new Set(keywords)];
+  
+  return docs.filter(doc => {
+    if (doc.score < 0.2) return false;
+    const content = doc.content.toLowerCase();
+    const matches = uniqueKeywords.filter(kw => content.includes(kw.toLowerCase()));
+    return matches.length > 0 || doc.score > 0.5;
+  });
 }
 
 // ==================== 上下文管理器 ====================
@@ -321,15 +670,19 @@ export class ContextManager {
   private config: ContextManagerConfig;
   private llm: ChatOllama;
   private embeddings: OllamaEmbeddings;
-  private windowManager: WindowManager;
-  private queryRewriter: QueryRewriter;
+  private rewriteChain: RunnableSequence<{ history: string; query: string }, string>;
+  private generateChain: RunnableSequence<GenerateInput, string>;
+  private summaryChain: RunnableSequence<{ conversation: string }, string>;
   
   constructor(config: Partial<ContextManagerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.llm = new ChatOllama({ model: this.config.llmModel, temperature: 0.7 });
     this.embeddings = new OllamaEmbeddings({ model: this.config.embeddingModel });
-    this.windowManager = new WindowManager(this.config.windowConfig);
-    this.queryRewriter = new QueryRewriter(this.llm);
+    
+    // 初始化 LangChain 链
+    this.rewriteChain = createRewriteChain(this.llm);
+    this.generateChain = createGenerateChain(this.llm);
+    this.summaryChain = createSummaryChain(this.llm);
   }
   
   getConfig(): ContextManagerConfig {
@@ -340,13 +693,13 @@ export class ContextManager {
     this.config = { ...this.config, ...newConfig };
     if (newConfig.llmModel) {
       this.llm = new ChatOllama({ model: this.config.llmModel, temperature: 0.7 });
-      this.queryRewriter = new QueryRewriter(this.llm);
+      // 重新创建所有链
+      this.rewriteChain = createRewriteChain(this.llm);
+      this.generateChain = createGenerateChain(this.llm);
+      this.summaryChain = createSummaryChain(this.llm);
     }
     if (newConfig.embeddingModel) {
       this.embeddings = new OllamaEmbeddings({ model: this.config.embeddingModel });
-    }
-    if (newConfig.windowConfig) {
-      this.windowManager = new WindowManager(this.config.windowConfig);
     }
   }
   
@@ -386,11 +739,11 @@ export class ContextManager {
   }
   
   async listSessions(): Promise<SessionMetadata[]> {
-    return listSessions();
+    return listAllSessions();
   }
   
   async deleteSession(sessionId: string): Promise<boolean> {
-    return deleteSession(sessionId);
+    return deleteSessionFile(sessionId);
   }
   
   // ==================== 核心查询处理 ====================
@@ -424,48 +777,54 @@ export class ContextManager {
     }
     workflowSteps.push(completeStep(loadStep, { isNew: !sessionData.messages.length }));
     
-    // 2. 窗口截断
+    // 2. 窗口截断 (使用 LangChain trimMessages)
     let trimStep = createStep('窗口截断');
-    const { messages: trimmedMessages, trimmedCount } = this.windowManager.trim(sessionData.messages);
+    const { messages: trimmedMessages, trimmedCount } = await trimConversationMessages(
+      sessionData.messages,
+      this.config.windowConfig
+    );
     sessionData.messages = trimmedMessages;
-    workflowSteps.push(completeStep(trimStep, { trimmedCount }));
+    workflowSteps.push(completeStep(trimStep, { trimmedCount, remainingCount: trimmedMessages.length }));
     
-    // 3. 查询改写
+    // 3. 查询改写 (使用 LangChain RunnableSequence)
     let rewriteStep = createStep('查询改写');
-    let rewrittenQuery = userQuery;
-    let needsRewrite = false;
-    let rewriteReason = '未启用';
+    let rewriteResult: RewriteResult = { rewrittenQuery: userQuery, needsRewrite: false, reason: '未启用' };
     
     if (this.config.enableQueryRewriting && sessionData.messages.length > 0) {
-      const rewriteResult = await this.queryRewriter.rewrite(userQuery, sessionData.messages);
-      rewrittenQuery = rewriteResult.rewrittenQuery;
-      needsRewrite = rewriteResult.needsRewrite;
-      rewriteReason = rewriteResult.reason;
+      rewriteResult = await rewriteQuery(userQuery, sessionData.messages, this.rewriteChain);
     }
     workflowSteps.push(completeStep(rewriteStep, {
       original: userQuery,
-      rewritten: rewrittenQuery,
-      needsRewrite,
-      reason: rewriteReason,
+      rewritten: rewriteResult.rewrittenQuery,
+      needsRewrite: rewriteResult.needsRewrite,
+      reason: rewriteResult.reason,
     }));
     
-    // 4. 判断是否需要检索（简单问候不检索）
-    const isGreeting = this.isGreeting(userQuery);
+    // 4. 判断是否需要检索
+    const greeting = isGreeting(userQuery);
     let retrievedDocs: RetrievedDocument[] = [];
     
-    if (!isGreeting) {
-      // 5. 向量检索
+    if (!greeting) {
+      // 5. 向量检索 (使用 LangChain Embeddings)
       let retrieveStep = createStep('向量检索');
-      retrievedDocs = await this.retrieve(rewrittenQuery, topK, threshold);
+      retrievedDocs = await retrieveDocuments(
+        rewriteResult.rewrittenQuery,
+        this.embeddings,
+        this.config.milvusCollection,
+        this.config.embeddingModel,
+        topK,
+        threshold
+      );
       workflowSteps.push(completeStep(retrieveStep, {
-        query: rewrittenQuery,
+        query: rewriteResult.rewrittenQuery,
         resultCount: retrievedDocs.length,
+        topScore: retrievedDocs[0]?.score,
       }));
       
       // 6. 相关性过滤
       let filterStep = createStep('相关性验证');
       const originalCount = retrievedDocs.length;
-      retrievedDocs = this.filterRelevant(retrievedDocs, rewrittenQuery);
+      retrievedDocs = filterRelevantDocuments(retrievedDocs, rewriteResult.rewrittenQuery);
       workflowSteps.push(completeStep(filterStep, {
         originalCount,
         filteredCount: retrievedDocs.length,
@@ -475,10 +834,29 @@ export class ContextManager {
       workflowSteps.push(completeStep(createStep('相关性验证'), { skipped: true }));
     }
     
-    // 7. 生成响应
+    // 7. 生成响应 (使用 LangChain RunnableBranch)
     let generateStep = createStep('响应生成');
-    const response = await this.generate(userQuery, rewrittenQuery, sessionData.messages, retrievedDocs, isGreeting);
-    workflowSteps.push(completeStep(generateStep, { responseLength: response.length }));
+    const context = retrievedDocs.length > 0
+      ? retrievedDocs.map((d, i) => `[${i + 1}] ${d.content}`).join('\n\n')
+      : '无相关参考资料';
+    
+    let response: string;
+    try {
+      response = await this.generateChain.invoke({
+        query: userQuery,
+        rewrittenQuery: rewriteResult.rewrittenQuery,
+        history: toBaseMessages(sessionData.messages.slice(-6)),
+        context,
+        isGreeting: greeting,
+      });
+    } catch (error) {
+      console.error('[generateChain] Error:', error);
+      response = '抱歉，生成回答时出错，请稍后重试。';
+    }
+    workflowSteps.push(completeStep(generateStep, { 
+      responseLength: response.length,
+      usedDocs: retrievedDocs.length,
+    }));
     
     // 8. 保存消息
     let saveStep = createStep('状态保存');
@@ -507,152 +885,16 @@ export class ContextManager {
         messages: sessionData.messages,
         metadata: sessionData.metadata,
         summary: sessionData.summary,
-        artifacts: { rewrittenQuery, retrievedDocuments: retrievedDocs },
+        artifacts: { rewrittenQuery: rewriteResult.rewrittenQuery, retrievedDocuments: retrievedDocs },
         workflowSteps,
       },
-      rewrittenQuery: needsRewrite ? rewrittenQuery : undefined,
+      rewrittenQuery: rewriteResult.needsRewrite ? rewriteResult.rewrittenQuery : undefined,
       retrievedDocs,
       workflowSteps,
     };
   }
   
-  // ==================== 辅助方法 ====================
-  
-  private isGreeting(query: string): boolean {
-    const greetings = [
-      /^(你好|您好|hi|hello|hey|嗨|哈喽)/i,
-      /^(早上好|下午好|晚上好|早安|晚安)/,
-      /^(你是谁|你叫什么|介绍一下你自己)/,
-      /^(谢谢|感谢|多谢|辛苦了)/,
-      /^(再见|拜拜|bye)/i,
-    ];
-    return greetings.some(p => p.test(query.trim()));
-  }
-  
-  private async retrieve(query: string, topK: number, threshold: number): Promise<RetrievedDocument[]> {
-    try {
-      let dimension = getModelDimension(this.config.embeddingModel);
-      let embeddings = this.embeddings;
-      
-      const milvus = getMilvusInstance({
-        collectionName: this.config.milvusCollection,
-        embeddingDimension: dimension,
-      });
-      
-      // 自动适配维度
-      try {
-        await milvus.connect();
-        const stats = await milvus.getCollectionStats();
-        if (stats?.embeddingDimension && stats.embeddingDimension !== dimension) {
-          const model = selectModelByDimension(stats.embeddingDimension);
-          embeddings = new OllamaEmbeddings({ model });
-        }
-      } catch { /* use default */ }
-      
-      const queryEmbedding = await embeddings.embedQuery(query);
-      const results = await milvus.search(queryEmbedding, topK, threshold);
-      
-      return results.map(r => ({
-        id: r.id || generateId(),
-        content: r.content,
-        score: r.score,
-        metadata: r.metadata,
-      }));
-    } catch (error) {
-      console.error('[ContextManager] 检索失败:', error);
-      return [];
-    }
-  }
-  
-  private filterRelevant(docs: RetrievedDocument[], query: string): RetrievedDocument[] {
-    if (docs.length === 0) return [];
-    
-    const keywords = this.extractKeywords(query);
-    
-    return docs.filter(doc => {
-      if (doc.score < 0.2) return false;
-      const content = doc.content.toLowerCase();
-      const matches = keywords.filter(kw => content.includes(kw.toLowerCase()));
-      return matches.length > 0 || doc.score > 0.5;
-    });
-  }
-  
-  private extractKeywords(text: string): string[] {
-    const keywords: string[] = [];
-    
-    const patterns = [
-      /(?:华为|苹果|小米|三星)[A-Za-z0-9\u4e00-\u9fff]+/g,
-      /(?:iPhone|iPad|MacBook|Mate|Galaxy)[A-Za-z0-9\s]*/gi,
-      /版本|价格|配置|参数|续航|屏幕/g,
-    ];
-    
-    for (const p of patterns) {
-      const m = text.match(p);
-      if (m) keywords.push(...m);
-    }
-    
-    const chinese = text.match(/[\u4e00-\u9fff]{2,6}/g);
-    if (chinese) {
-      const stops = ['什么', '怎么', '如何', '为什么', '哪个', '那个', '这个'];
-      keywords.push(...chinese.filter(w => !stops.includes(w)));
-    }
-    
-    return [...new Set(keywords)];
-  }
-  
-  private async generate(
-    originalQuery: string,
-    rewrittenQuery: string,
-    history: ConversationMessage[],
-    docs: RetrievedDocument[],
-    isGreeting: boolean
-  ): Promise<string> {
-    // 构建历史
-    const historyText = history.slice(-6).map(m => 
-      `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`
-    ).join('\n');
-    
-    // 构建上下文
-    const context = docs.length > 0
-      ? docs.map((d, i) => `[${i + 1}] ${d.content}`).join('\n\n')
-      : '';
-    
-    let prompt: string;
-    
-    if (isGreeting) {
-      // 问候语直接回答
-      prompt = `你是一个友好的智能助手。请自然地回应用户的问候或问题。
-
-${historyText ? `对话历史:\n${historyText}\n` : ''}
-用户: ${originalQuery}
-
-请友好地回应:`;
-    } else {
-      // 知识问答
-      prompt = `你是一个智能助手。请根据参考资料回答用户问题。
-
-${historyText ? `对话历史:\n${historyText}\n` : ''}
-用户问题: ${originalQuery}
-${rewrittenQuery !== originalQuery ? `理解后的问题: ${rewrittenQuery}\n` : ''}
-${context ? `参考资料:\n${context}\n` : '参考资料: 无\n'}
-要求:
-1. 如果参考资料中有相关信息，基于资料回答
-2. 如果参考资料中没有相关信息，尝试用你的知识回答，但要说明这不是来自资料库
-3. 保持回答简洁友好
-
-回答:`;
-    }
-    
-    try {
-      const response = await this.llm.invoke(prompt);
-      return response.content.toString().trim();
-    } catch (error) {
-      console.error('[ContextManager] 生成失败:', error);
-      return '抱歉，生成回答时出错，请稍后重试。';
-    }
-  }
-  
-  // ==================== 压缩 ====================
+  // ==================== 压缩功能 (使用 LangChain 链) ====================
   
   async compressBySummary(sessionId: string): Promise<{
     success: boolean;
@@ -669,24 +911,23 @@ ${context ? `参考资料:\n${context}\n` : '参考资料: 无\n'}
     
     if (oldMsgs.length < 4) return { success: false };
     
-    const conversation = oldMsgs.map(m => 
-      `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`
-    ).join('\n');
+    // 使用 getBufferString 格式化对话
+    const baseMessages = toBaseMessages(oldMsgs);
+    const conversation = getBufferString(baseMessages, '用户', 'AI');
     
     try {
-      const response = await this.llm.invoke(
-        `将以下对话压缩为100-200字摘要:\n\n${conversation}\n\n摘要:`
-      );
-      const summary = response.content.toString().trim();
+      // 使用 LangChain 摘要链
+      const summary = await this.summaryChain.invoke({ conversation });
       
       data.messages = recentMsgs;
-      data.summary = summary;
+      data.summary = summary.trim();
       data.metadata.summarizedRounds += Math.floor(oldMsgs.length / 2);
       data.metadata.messageCount = recentMsgs.length;
       
       saveSession(data);
-      return { success: true, summary, compressedCount: oldMsgs.length };
-    } catch {
+      return { success: true, summary: data.summary, compressedCount: oldMsgs.length };
+    } catch (error) {
+      console.error('[compressBySummary] Error:', error);
       return { success: false };
     }
   }
@@ -708,4 +949,12 @@ export function createContextManager(config: Partial<ContextManagerConfig> = {})
   return new ContextManager(config);
 }
 
-export { DEFAULT_CONFIG as CONTEXT_MANAGER_DEFAULT_CONFIG, estimateTokens, generateId };
+export { 
+  DEFAULT_CONFIG as CONTEXT_MANAGER_DEFAULT_CONFIG, 
+  estimateTokens, 
+  generateId, 
+  toBaseMessages, 
+  fromBaseMessage,
+  tokenCounter,
+  trimMessagesWithLangChain,
+};
