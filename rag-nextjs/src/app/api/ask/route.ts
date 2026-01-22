@@ -4,6 +4,7 @@ import { analyzeQuery } from '@/lib/semantic-analyzer';
 import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
 import { OllamaEmbeddings } from '@langchain/ollama';
 import { AgenticRAGSystem } from '@/lib/agentic-rag';
+import { createAdaptiveEntityRAG } from '@/lib/adaptive-entity-rag';
 
 const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
 const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
@@ -38,7 +39,9 @@ export async function POST(request: NextRequest) {
       sessionId,
       storageBackend = 'memory', // 存储后端选择
       useAgenticRAG = false,     // 是否使用 Agentic RAG 模式
+      useAdaptiveEntityRAG = false, // 是否使用自适应实体路由 RAG 模式
       maxRetries = 2,            // Agentic RAG 最大重试次数
+      enableReranking = true,    // 自适应实体 RAG 是否启用重排序
     } = body;
 
     if (!question || typeof question !== "string") {
@@ -48,7 +51,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[Ask API] 使用模型 - LLM: ${llmModel}, Embedding: ${embeddingModel}, 后端: ${storageBackend}, Agentic: ${useAgenticRAG}`);
+    console.log(`[Ask API] 使用模型 - LLM: ${llmModel}, Embedding: ${embeddingModel}, 后端: ${storageBackend}, Agentic: ${useAgenticRAG}, AdaptiveEntity: ${useAdaptiveEntityRAG}`);
+
+    // 使用自适应实体路由 RAG 模式
+    if (useAdaptiveEntityRAG && storageBackend === 'milvus') {
+      return await handleAdaptiveEntityQuery(question, {
+        topK: parseInt(topK),
+        llmModel,
+        embeddingModel,
+        maxRetries: parseInt(maxRetries),
+        enableReranking,
+      });
+    }
 
     // 使用 Agentic RAG 模式
     if (useAgenticRAG && storageBackend === 'milvus') {
@@ -338,6 +352,132 @@ async function handleAgenticQuery(
       {
         success: false,
         error: 'Agentic RAG 查询失败',
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// 自适应实体路由 RAG 查询处理
+async function handleAdaptiveEntityQuery(
+  question: string,
+  options: {
+    topK: number;
+    llmModel: string;
+    embeddingModel: string;
+    maxRetries: number;
+    enableReranking: boolean;
+  }
+) {
+  const { topK, llmModel, embeddingModel, maxRetries, enableReranking } = options;
+
+  try {
+    console.log(`[Adaptive Entity RAG] 处理查询: "${question}"`);
+    
+    const adaptiveRAG = createAdaptiveEntityRAG({
+      llmModel,
+      embeddingModel,
+      maxRetries,
+      enableReranking,
+      milvusCollection: MILVUS_COLLECTION, // 使用主集合
+    });
+
+    const startTime = Date.now();
+    const result = await adaptiveRAG.query(question, topK);
+    const duration = Date.now() - startTime;
+
+    console.log(`[Adaptive Entity RAG] 查询完成, 耗时 ${duration}ms`);
+
+    // 确保 query 对象存在且有必要的字段
+    const queryData = result.query || {};
+
+    return NextResponse.json({
+      success: true,
+      question,
+      answer: result.finalResponse || '',
+      models: {
+        llm: llmModel,
+        embedding: embeddingModel,
+      },
+      storageBackend: 'milvus',
+      adaptiveEntityMode: true,
+      
+      // 工作流信息
+      workflow: {
+        steps: result.steps || [],
+        totalDuration: result.totalDuration || duration,
+      },
+      
+      // 查询分析（认知解析层输出）- 确保所有字段都有默认值
+      queryAnalysis: {
+        originalQuery: queryData.originalQuery || question,
+        intent: queryData.intent || 'factual',
+        complexity: queryData.complexity || 'simple',
+        confidence: queryData.confidence || 0.8,
+        entities: queryData.entities || [],
+        logicalRelations: queryData.logicalRelations || [],
+        keywords: queryData.keywords || [],
+      },
+      
+      // 实体校验结果
+      entityValidation: (result.validatedEntities || []).map(e => ({
+        name: e.name,
+        type: e.type,
+        normalizedName: e.normalizedName,
+        isValid: e.isValid,
+        matchScore: e.matchScore,
+        suggestions: e.suggestions,
+      })),
+      
+      // 路由决策 - 确保有默认值
+      routingDecision: {
+        action: result.currentDecision?.action || 'semantic_search',
+        reason: result.currentDecision?.reason || '默认语义检索',
+        constraints: result.currentDecision?.constraints || [],
+        relaxedConstraints: result.currentDecision?.relaxedConstraints || [],
+        retryCount: result.currentDecision?.retryCount || 0,
+      },
+      
+      // 检索详情
+      retrievalDetails: {
+        searchResults: (result.rankedResults || []).map((r, i) => ({
+          document: {
+            content: r.content,
+            metadata: r.metadata,
+          },
+          similarity: r.score,
+          rerankedScore: r.rerankedScore,
+          relevanceExplanation: r.relevanceExplanation,
+          matchType: r.matchType,
+          index: i,
+        })),
+        searchResultCount: (result.searchResults || []).length,
+        rankedResultCount: (result.rankedResults || []).length,
+        topResults: (result.rankedResults || []).slice(0, 3).map(r => ({
+          id: r.id,
+          score: r.score,
+          rerankedScore: r.rerankedScore,
+          relevanceExplanation: r.relevanceExplanation,
+          contentPreview: r.content.substring(0, 200) + (r.content.length > 200 ? '...' : ''),
+          matchType: r.matchType,
+        })),
+        totalDocuments: (result.rankedResults || []).length,
+        topK: topK,
+      },
+      
+      context: (result.rankedResults || []).map(r => r.content).join('\n\n'),
+      traceId: `adaptive-entity-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      duration,
+    });
+
+  } catch (error) {
+    console.error('[Adaptive Entity RAG Error]:', error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: '自适应实体路由 RAG 查询失败',
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }

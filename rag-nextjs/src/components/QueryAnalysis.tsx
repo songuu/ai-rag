@@ -8,8 +8,30 @@ const ReactECharts = dynamic(() => import('echarts-for-react'), { ssr: false });
 interface TokenInfo {
   token: string;
   tokenId: number;
-  type: 'chinese' | 'english' | 'number' | 'punctuation' | 'special';
+  type: 'chinese' | 'english' | 'number' | 'punctuation' | 'special' | 'entity' | 'keyword';
+  entityType?: string;
+  confidence?: number;
 }
+
+interface ExtractedEntity {
+  name: string;
+  type: string;
+  value?: string;
+  confidence: number;
+  normalizedName?: string;
+}
+
+// 实体类型配置
+const ENTITY_TYPE_CONFIG: Record<string, { icon: string; color: string; bg: string; label: string }> = {
+  PERSON: { icon: '👤', color: 'text-blue-600', bg: 'bg-blue-100 border-blue-200', label: '人物' },
+  ORGANIZATION: { icon: '🏢', color: 'text-purple-600', bg: 'bg-purple-100 border-purple-200', label: '组织' },
+  LOCATION: { icon: '📍', color: 'text-green-600', bg: 'bg-green-100 border-green-200', label: '地点' },
+  PRODUCT: { icon: '📦', color: 'text-orange-600', bg: 'bg-orange-100 border-orange-200', label: '产品' },
+  DATE: { icon: '📅', color: 'text-cyan-600', bg: 'bg-cyan-100 border-cyan-200', label: '时间' },
+  EVENT: { icon: '🎯', color: 'text-pink-600', bg: 'bg-pink-100 border-pink-200', label: '事件' },
+  CONCEPT: { icon: '💡', color: 'text-yellow-600', bg: 'bg-yellow-100 border-yellow-200', label: '概念' },
+  OTHER: { icon: '🏷️', color: 'text-slate-600', bg: 'bg-slate-100 border-slate-200', label: '其他' },
+};
 
 interface QueryAnalysisProps {
   analysis: any;
@@ -267,33 +289,180 @@ export default function QueryAnalysis({
           
           <div>
             <span className="text-xs text-gray-500">Token 序列 ({analysis.tokenization?.tokenCount || 0} 个词元):</span>
-            <div className="flex flex-wrap gap-1 mt-2">
-              {analysis.tokenization?.tokens?.slice(0, 15).map((token: TokenInfo, i: number) => {
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              {analysis.tokenization?.tokens?.slice(0, 30).map((token: TokenInfo, i: number) => {
                 const colors: Record<string, string> = {
-                  chinese: 'bg-red-100 text-red-700 border-red-200',
-                  english: 'bg-blue-100 text-blue-700 border-blue-200',
-                  number: 'bg-green-100 text-green-700 border-green-200',
-                  punctuation: 'bg-yellow-100 text-yellow-700 border-yellow-200',
-                  special: 'bg-gray-100 text-gray-700 border-gray-200'
+                  chinese: 'bg-red-50 text-red-700 border-red-200',
+                  english: 'bg-blue-50 text-blue-700 border-blue-200',
+                  number: 'bg-green-50 text-green-700 border-green-200',
+                  punctuation: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+                  special: 'bg-gray-50 text-gray-700 border-gray-200',
+                  entity: 'bg-gradient-to-r from-purple-100 to-indigo-100 text-purple-800 border-purple-300 ring-1 ring-purple-300 font-semibold',
+                  keyword: 'bg-gradient-to-r from-cyan-50 to-blue-50 text-cyan-700 border-cyan-300 font-medium',
                 };
+                
+                const isEntity = token.type === 'entity';
+                const isKeyword = token.type === 'keyword';
+                const entityConfig = isEntity && token.entityType ? ENTITY_TYPE_CONFIG[token.entityType] || ENTITY_TYPE_CONFIG.OTHER : null;
+                
                 return (
                   <span
                     key={i}
-                    className={`inline-flex items-center px-2 py-1 rounded text-xs border ${colors[token.type] || colors.special} hover:scale-105 transition-transform cursor-default`}
-                    title={`Token ID: ${token.tokenId}`}
+                    className={`inline-flex items-center px-2 py-1 rounded text-xs border ${colors[token.type] || colors.special} hover:scale-105 transition-transform cursor-default ${isEntity ? 'shadow-sm' : ''}`}
+                    title={isEntity ? `实体: ${token.entityType} (${((token.confidence || 0) * 100).toFixed(0)}%)` : 
+                           isKeyword ? '关键词' : `Token ID: ${token.tokenId}`}
                   >
+                    {isEntity && entityConfig && (
+                      <span className="mr-1">{entityConfig.icon}</span>
+                    )}
+                    {isKeyword && <span className="mr-1 text-cyan-500">✦</span>}
                     {token.token}
-                    <sub className="text-[10px] opacity-50 ml-1">{token.tokenId}</sub>
+                    {!isEntity && !isKeyword && (
+                      <sub className="text-[10px] opacity-40 ml-1">{token.tokenId}</sub>
+                    )}
+                    {isEntity && token.confidence && (
+                      <span className="ml-1 text-[10px] bg-purple-200/50 px-1 rounded">{((token.confidence) * 100).toFixed(0)}%</span>
+                    )}
                   </span>
                 );
               })}
-              {analysis.tokenization?.tokens && analysis.tokenization.tokens.length > 15 && (
-                <span className="text-xs text-gray-400 flex items-center">+{analysis.tokenization.tokens.length - 15} more</span>
+              {analysis.tokenization?.tokens && analysis.tokenization.tokens.length > 30 && (
+                <span className="text-xs text-gray-400 flex items-center px-2">+{analysis.tokenization.tokens.length - 30} more</span>
+              )}
+            </div>
+            {/* Token 类型图例 */}
+            <div className="flex flex-wrap gap-2 mt-3 pt-2 border-t border-gray-100">
+              <span className="text-[10px] text-gray-400">图例:</span>
+              <span className="inline-flex items-center gap-1 text-[10px] text-red-600"><span className="w-2 h-2 rounded bg-red-200"></span>中文</span>
+              <span className="inline-flex items-center gap-1 text-[10px] text-blue-600"><span className="w-2 h-2 rounded bg-blue-200"></span>英文</span>
+              <span className="inline-flex items-center gap-1 text-[10px] text-green-600"><span className="w-2 h-2 rounded bg-green-200"></span>数字</span>
+              {analysis.tokenization?.tokens?.some((t: TokenInfo) => t.type === 'entity') && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-purple-600 font-medium"><span className="w-2 h-2 rounded bg-purple-300"></span>实体</span>
+              )}
+              {analysis.tokenization?.tokens?.some((t: TokenInfo) => t.type === 'keyword') && (
+                <span className="inline-flex items-center gap-1 text-[10px] text-cyan-600 font-medium"><span className="w-2 h-2 rounded bg-cyan-300"></span>关键词</span>
               )}
             </div>
           </div>
         </div>
       </div>
+      
+      {/* 实体抽取信息 - 仅在 Entity 模式下显示 */}
+      {analysis.adaptiveEntityAnalysis?.entities && analysis.adaptiveEntityAnalysis.entities.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h5 className="text-xs font-medium text-indigo-700 flex items-center gap-1">
+              <span className="w-5 h-5 rounded bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">🎯</span>
+              实体抽取 (Entity Extraction)
+            </h5>
+            <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded">
+              {analysis.adaptiveEntityAnalysis.entities.length} 个实体
+            </span>
+          </div>
+          <div className="bg-white rounded-lg p-3 border border-indigo-100 shadow-sm space-y-3">
+            {/* 实体统计 */}
+            <div className="flex flex-wrap gap-2">
+              {(() => {
+                const stats: Record<string, number> = {};
+                analysis.adaptiveEntityAnalysis.entities.forEach((e: ExtractedEntity) => {
+                  stats[e.type] = (stats[e.type] || 0) + 1;
+                });
+                return Object.entries(stats).map(([type, count]) => {
+                  const config = ENTITY_TYPE_CONFIG[type] || ENTITY_TYPE_CONFIG.OTHER;
+                  return (
+                    <span key={type} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs ${config.bg} ${config.color} border`}>
+                      {config.icon} {config.label}: {String(count)}
+                    </span>
+                  );
+                });
+              })()}
+            </div>
+            
+            {/* 实体列表 */}
+            <div className="grid gap-2">
+              {analysis.adaptiveEntityAnalysis.entities.map((entity: ExtractedEntity, idx: number) => {
+                const config = ENTITY_TYPE_CONFIG[entity.type] || ENTITY_TYPE_CONFIG.OTHER;
+                return (
+                  <div 
+                    key={idx} 
+                    className={`flex items-center justify-between p-2 rounded-lg ${config.bg} border`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">{config.icon}</span>
+                      <div>
+                        <span className={`font-medium ${config.color}`}>{entity.name}</span>
+                        {entity.normalizedName && entity.normalizedName !== entity.name && (
+                          <span className="text-gray-500 text-xs ml-2">
+                            → {entity.normalizedName}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-500">{config.label}</span>
+                      <div className="w-16 h-1.5 bg-gray-200 rounded-full overflow-hidden">
+                        <div 
+                          className="h-full bg-gradient-to-r from-indigo-400 to-purple-500 rounded-full"
+                          style={{ width: `${entity.confidence * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-xs font-mono text-gray-600 w-10 text-right">
+                        {(entity.confidence * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            
+            {/* 意图和复杂度 */}
+            {(analysis.adaptiveEntityAnalysis.intent || analysis.adaptiveEntityAnalysis.complexity) && (
+              <div className="grid grid-cols-3 gap-2 pt-2 border-t border-indigo-100">
+                <div className="bg-indigo-50/50 rounded-lg p-2 text-center">
+                  <div className="text-[10px] text-indigo-500 uppercase tracking-wide">意图</div>
+                  <div className="text-sm font-medium text-indigo-700 capitalize">
+                    {analysis.adaptiveEntityAnalysis.intent === 'factual' ? '📊 事实查询' :
+                     analysis.adaptiveEntityAnalysis.intent === 'comparison' ? '⚖️ 比较分析' :
+                     analysis.adaptiveEntityAnalysis.intent === 'conceptual' ? '💡 概念理解' :
+                     analysis.adaptiveEntityAnalysis.intent === 'procedural' ? '📝 操作指导' :
+                     analysis.adaptiveEntityAnalysis.intent === 'exploratory' ? '🔍 探索性' :
+                     analysis.adaptiveEntityAnalysis.intent || '未知'}
+                  </div>
+                </div>
+                <div className="bg-orange-50/50 rounded-lg p-2 text-center">
+                  <div className="text-[10px] text-orange-500 uppercase tracking-wide">复杂度</div>
+                  <div className="text-sm font-medium text-orange-700 capitalize">
+                    {analysis.adaptiveEntityAnalysis.complexity === 'simple' ? '🟢 简单' :
+                     analysis.adaptiveEntityAnalysis.complexity === 'moderate' ? '🟡 中等' :
+                     analysis.adaptiveEntityAnalysis.complexity === 'complex' ? '🔴 复杂' :
+                     analysis.adaptiveEntityAnalysis.complexity || '未知'}
+                  </div>
+                </div>
+                <div className="bg-green-50/50 rounded-lg p-2 text-center">
+                  <div className="text-[10px] text-green-500 uppercase tracking-wide">置信度</div>
+                  <div className="text-sm font-medium text-green-700">
+                    {((analysis.adaptiveEntityAnalysis.confidence || 0) * 100).toFixed(0)}%
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* 关键词 */}
+            {analysis.adaptiveEntityAnalysis.keywords && analysis.adaptiveEntityAnalysis.keywords.length > 0 && (
+              <div className="pt-2 border-t border-indigo-100">
+                <div className="text-[10px] text-gray-500 mb-1">提取的关键词:</div>
+                <div className="flex flex-wrap gap-1">
+                  {analysis.adaptiveEntityAnalysis.keywords.map((kw: string, i: number) => (
+                    <span key={i} className="px-2 py-0.5 bg-cyan-50 text-cyan-700 text-xs rounded-full border border-cyan-200">
+                      ✦ {kw}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       
       {/* 向量化与语义分析 */}
       <div>

@@ -37,17 +37,20 @@ async function getAdaptiveMilvus(embeddingModel: string = DEFAULT_EMBEDDING_MODE
   return milvusInstance;
 }
 
-function getRAGInstance(config?: {
+async function getRAGInstance(config?: {
   llmModel?: string;
   embeddingModel?: string;
   maxRetries?: number;
   enableReranking?: boolean;
-}): AdaptiveEntityRAG {
+  similarityThreshold?: number;
+}): Promise<AdaptiveEntityRAG> {
   if (!ragInstance || config) {
     ragInstance = createAdaptiveEntityRAG({
       ...config,
       milvusCollection: ADAPTIVE_RAG_COLLECTION,
     });
+    // 初始化（加载持久化数据）
+    await ragInstance.initialize();
   }
   return ragInstance;
 }
@@ -62,8 +65,8 @@ export async function GET(request: NextRequest) {
   try {
     switch (action) {
       case 'status': {
-        const rag = getRAGInstance();
-        const entityStore = rag.getEntityMetadataStore();
+        const rag = await getRAGInstance();
+        const entityStore = await rag.getEntityMetadataStoreAsync();
         const entities = entityStore.getAllEntities();
         
         // 按类型统计实体
@@ -116,8 +119,8 @@ export async function GET(request: NextRequest) {
 
       case 'entities': {
         const type = searchParams.get('type') as EntityType | null;
-        const rag = getRAGInstance();
-        const entityStore = rag.getEntityMetadataStore();
+        const rag = await getRAGInstance();
+        const entityStore = await rag.getEntityMetadataStoreAsync();
         
         let entities: EntityMetadata[];
         if (type) {
@@ -225,6 +228,7 @@ export async function POST(request: NextRequest) {
           embeddingModel,
           maxRetries = 3,
           enableReranking = true,
+          similarityThreshold = 0.3,
         } = params;
 
         if (!question || typeof question !== 'string') {
@@ -235,13 +239,14 @@ export async function POST(request: NextRequest) {
         }
 
         console.log(`[AdaptiveEntityRAG] 处理查询: "${question}"`);
-        console.log(`[AdaptiveEntityRAG] 配置: LLM=${llmModel}, Embedding=${embeddingModel}, MaxRetries=${maxRetries}`);
+        console.log(`[AdaptiveEntityRAG] 配置: LLM=${llmModel}, Embedding=${embeddingModel}, MaxRetries=${maxRetries}, Threshold=${similarityThreshold}`);
 
-        const rag = getRAGInstance({
+        const rag = await getRAGInstance({
           llmModel,
           embeddingModel,
           maxRetries,
           enableReranking,
+          similarityThreshold,
         });
 
         const startTime = Date.now();
@@ -309,17 +314,51 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const rag = getRAGInstance();
-        rag.addEntityMapping({
+        const rag = await getRAGInstance();
+        const entityStore = await rag.getEntityMetadataStoreAsync();
+        
+        // 添加实体并持久化
+        entityStore.addEntity({
           standardName,
           type,
           aliases,
           hierarchy,
-        });
+        }, true); // persist = true
 
         return NextResponse.json({
           success: true,
           message: `已添加实体: ${standardName}`,
+        });
+      }
+
+      case 'remove-entity': {
+        const { standardName } = params;
+
+        if (!standardName) {
+          return NextResponse.json(
+            { success: false, error: '请提供实体标准名称' },
+            { status: 400 }
+          );
+        }
+
+        const rag = await getRAGInstance();
+        const entityStore = await rag.getEntityMetadataStoreAsync();
+        const deleted = entityStore.removeEntity(standardName, true);
+
+        return NextResponse.json({
+          success: deleted,
+          message: deleted ? `已删除实体: ${standardName}` : `未找到实体: ${standardName}`,
+        });
+      }
+
+      case 'reset-entities': {
+        const rag = await getRAGInstance();
+        const entityStore = await rag.getEntityMetadataStoreAsync();
+        await entityStore.reset();
+
+        return NextResponse.json({
+          success: true,
+          message: '实体库已重置为默认映射',
         });
       }
 
@@ -334,7 +373,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const rag = getRAGInstance({ llmModel, embeddingModel });
+        const rag = await getRAGInstance({ llmModel, embeddingModel });
         
         // 使用内部方法进行解析
         const { CognitiveParser } = await import('@/lib/adaptive-entity-rag');
@@ -375,7 +414,7 @@ export async function POST(request: NextRequest) {
         const { llmModel, embeddingModel } = params;
         ragInstance = null;
         milvusInstance = null;
-        getRAGInstance({ llmModel, embeddingModel });
+        await getRAGInstance({ llmModel, embeddingModel });
         
         return NextResponse.json({
           success: true,

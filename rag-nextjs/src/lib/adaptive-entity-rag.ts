@@ -145,7 +145,7 @@ const DEFAULT_CONFIG: AdaptiveRAGConfig = {
   maxRetries: 3,
   constraintPriority: ['PERSON', 'ORGANIZATION', 'PRODUCT', 'EVENT', 'LOCATION', 'DATE', 'CONCEPT', 'OTHER'],
   minResultCount: 3,
-  similarityThreshold: 0.6,
+  similarityThreshold: 0.3,  // 降低阈值，避免过度过滤
   enableReranking: true,
   milvusCollection: 'rag_documents',
 };
@@ -281,6 +281,186 @@ class EntityPreprocessor {
     '石城': '南京', '星城': '长沙', '花城': '广州', '雾都': '重庆',
   };
 
+  // 常见地名列表（用于规则识别）
+  private static readonly KNOWN_LOCATIONS: string[] = [
+    // 直辖市
+    '北京', '上海', '天津', '重庆',
+    // 省会城市
+    '广州', '深圳', '杭州', '南京', '成都', '武汉', '西安', '苏州',
+    '长沙', '郑州', '青岛', '大连', '宁波', '厦门', '济南', '福州',
+    '合肥', '昆明', '贵阳', '南宁', '南昌', '太原', '石家庄', '长春',
+    '哈尔滨', '沈阳', '兰州', '西宁', '银川', '呼和浩特', '乌鲁木齐',
+    '拉萨', '海口', '三亚',
+    // 国家
+    '中国', '美国', '日本', '韩国', '英国', '法国', '德国', '俄罗斯',
+    '印度', '巴西', '加拿大', '澳大利亚', '新加坡', '香港', '台湾', '澳门',
+    // 国际城市
+    '纽约', '伦敦', '巴黎', '东京', '首尔', '新加坡', '悉尼', '多伦多',
+    '洛杉矶', '旧金山', '硅谷', '西雅图', '芝加哥', '波士顿',
+  ];
+
+  // 常见组织/公司名称
+  private static readonly KNOWN_ORGANIZATIONS: string[] = [
+    '苹果', 'Apple', '谷歌', 'Google', '微软', 'Microsoft', '亚马逊', 'Amazon',
+    '特斯拉', 'Tesla', '华为', '阿里巴巴', '腾讯', '百度', '字节跳动', '京东',
+    '小米', 'OpenAI', 'Meta', 'Facebook', 'Twitter', 'X', 'SpaceX',
+    'Netflix', '英伟达', 'NVIDIA', 'AMD', 'Intel', '三星', 'Samsung',
+  ];
+
+  // 常见人名
+  private static readonly KNOWN_PERSONS: string[] = [
+    '马斯克', 'Elon Musk', '库克', 'Tim Cook', '马云', '马化腾', '李彦宏',
+    '雷军', '任正非', '刘强东', '张一鸣', '黄仁勋', '比尔盖茨', 'Bill Gates',
+    '扎克伯格', 'Mark Zuckerberg', '贝索斯', 'Jeff Bezos', '乔布斯', 'Steve Jobs',
+  ];
+
+  // 常见产品/概念
+  private static readonly KNOWN_PRODUCTS: string[] = [
+    'iPhone', 'iPad', 'MacBook', 'Apple Watch', 'AirPods',
+    'ChatGPT', 'GPT-4', 'GPT-4o', 'Claude', 'Gemini', 'Llama',
+    'Model Y', 'Model 3', 'Model S', 'Model X', 'Cybertruck',
+    '微信', 'WeChat', '支付宝', '淘宝', '抖音', 'TikTok',
+  ];
+
+  // 常见技术概念/术语
+  private static readonly KNOWN_CONCEPTS: string[] = [
+    // 网络技术
+    'VPN', 'DNS', 'IP', 'TCP', 'UDP', 'HTTP', 'HTTPS', 'SSL', 'TLS',
+    'WiFi', 'WLAN', '路由器', '交换机', '防火墙', '代理', 'Proxy',
+    'L2TP', 'PPTP', 'IPSec', 'OpenVPN', 'WireGuard', 'IKEv2',
+    // 编程技术
+    'API', 'SDK', 'REST', 'GraphQL', 'JSON', 'XML', 'SQL', 'NoSQL',
+    'Docker', 'Kubernetes', 'K8s', 'Git', 'CI/CD', 'DevOps',
+    'Python', 'Java', 'JavaScript', 'TypeScript', 'React', 'Vue', 'Angular',
+    // AI/ML
+    'AI', '人工智能', 'ML', '机器学习', 'DL', '深度学习', 'NLP', '自然语言处理',
+    'LLM', '大模型', 'RAG', 'Embedding', '向量数据库', 'Transformer',
+    // 系统
+    'Windows', 'Linux', 'MacOS', 'Android', 'iOS',
+    '驱动', '补丁', '更新', '重启', '安装', '卸载', '配置',
+  ];
+
+  /**
+   * 使用规则识别实体（不依赖 LLM）
+   */
+  static extractEntitiesByRules(query: string): ExtractedEntity[] {
+    const entities: ExtractedEntity[] = [];
+    const processedNames = new Set<string>();
+    const queryLower = query.toLowerCase();
+
+    // 1. 检查地名别称
+    for (const [alias, standard] of Object.entries(this.LOCATION_ALIASES)) {
+      if (query.includes(alias)) {
+        entities.push({
+          name: standard,
+          type: 'LOCATION',
+          value: alias,
+          confidence: 0.95,
+        });
+        processedNames.add(alias);
+        processedNames.add(standard);
+      }
+    }
+
+    // 2. 检查已知地名
+    for (const location of this.KNOWN_LOCATIONS) {
+      if (query.includes(location) && !processedNames.has(location)) {
+        entities.push({
+          name: location,
+          type: 'LOCATION',
+          value: location,
+          confidence: 0.9,
+        });
+        processedNames.add(location);
+      }
+    }
+
+    // 3. 检查已知组织
+    for (const org of this.KNOWN_ORGANIZATIONS) {
+      if (query.includes(org) || queryLower.includes(org.toLowerCase())) {
+        if (!processedNames.has(org)) {
+          entities.push({
+            name: org,
+            type: 'ORGANIZATION',
+            value: org,
+            confidence: 0.9,
+          });
+          processedNames.add(org);
+        }
+      }
+    }
+
+    // 4. 检查已知人名
+    for (const person of this.KNOWN_PERSONS) {
+      if (query.includes(person) || queryLower.includes(person.toLowerCase())) {
+        if (!processedNames.has(person)) {
+          entities.push({
+            name: person,
+            type: 'PERSON',
+            value: person,
+            confidence: 0.9,
+          });
+          processedNames.add(person);
+        }
+      }
+    }
+
+    // 5. 检查已知产品
+    for (const product of this.KNOWN_PRODUCTS) {
+      if (query.includes(product) || queryLower.includes(product.toLowerCase())) {
+        if (!processedNames.has(product)) {
+          entities.push({
+            name: product,
+            type: 'PRODUCT',
+            value: product,
+            confidence: 0.85,
+          });
+          processedNames.add(product);
+        }
+      }
+    }
+
+    // 6. 检查已知技术概念
+    for (const concept of this.KNOWN_CONCEPTS) {
+      if (query.includes(concept) || queryLower.includes(concept.toLowerCase())) {
+        if (!processedNames.has(concept) && !processedNames.has(concept.toLowerCase())) {
+          entities.push({
+            name: concept,
+            type: 'CONCEPT',
+            value: concept,
+            confidence: 0.85,
+          });
+          processedNames.add(concept);
+          processedNames.add(concept.toLowerCase());
+        }
+      }
+    }
+
+    // 7. 识别错误代码模式（如"报错 809"、"错误代码 500"、"error 404"）
+    const errorPatterns = [
+      /(?:报错|错误|错误代码|error|code|故障码|异常)[:\s]?(\d{2,5})/gi,
+      /(\d{3,5})(?:错误|报错|异常|故障)/gi,
+    ];
+    
+    for (const pattern of errorPatterns) {
+      let match;
+      while ((match = pattern.exec(query)) !== null) {
+        const errorCode = match[1];
+        if (!processedNames.has(errorCode)) {
+          entities.push({
+            name: `错误代码 ${errorCode}`,
+            type: 'CONCEPT',
+            value: errorCode,
+            confidence: 0.9,
+          });
+          processedNames.add(errorCode);
+        }
+      }
+    }
+
+    return entities;
+  }
+
   // 预处理结果
   static preprocess(query: string): {
     normalizedQuery: string;
@@ -411,7 +591,14 @@ export class CognitiveParser {
 
     const capability = this.getModelCapabilityLevel();
     
-    // 对于低能力模型，使用预处理增强
+    // 1. 首先使用规则提取实体（作为基础）
+    const ruleBasedEntities = EntityPreprocessor.extractEntitiesByRules(query);
+    if (ruleBasedEntities.length > 0) {
+      console.log(`[CognitiveParser] 规则识别到 ${ruleBasedEntities.length} 个实体:`, 
+        ruleBasedEntities.map(e => `${e.name}(${e.type})`).join(', '));
+    }
+    
+    // 2. 对于低能力模型，使用预处理增强
     const { normalizedQuery, preMappedEntities } = capability === 'low' 
       ? EntityPreprocessor.preprocess(query)
       : { normalizedQuery: query, preMappedEntities: [] };
@@ -431,7 +618,7 @@ export class CognitiveParser {
       const parsed = this.safeParseJson(content);
       
       // 提取 LLM 返回的实体
-      let entities = (parsed.entities || []).map((e: any) => ({
+      let llmEntities = (parsed.entities || []).map((e: any) => ({
         name: e.name || '',
         type: this.normalizeEntityType(e.type),
         value: e.value || e.name || '',
@@ -439,26 +626,31 @@ export class CognitiveParser {
       }));
 
       // 验证实体：确保实体名称确实出现在原始查询中
-      entities = this.validateEntitiesAgainstQuery(entities, query, normalizedQuery);
+      llmEntities = this.validateEntitiesAgainstQuery(llmEntities, query, normalizedQuery);
 
       // 对于低能力模型，应用后处理校验
       if (capability === 'low') {
-        entities = EntityPreprocessor.postprocess(entities, preMappedEntities);
+        llmEntities = EntityPreprocessor.postprocess(llmEntities, preMappedEntities);
       }
+
+      // 3. 合并规则提取和 LLM 提取的实体（规则提取优先）
+      const entities = this.mergeEntities(ruleBasedEntities, llmEntities);
+      
+      console.log(`[CognitiveParser] 最终实体数: ${entities.length} (规则: ${ruleBasedEntities.length}, LLM: ${llmEntities.length})`);
 
       return {
         originalQuery: query,
         entities,
         logicalRelations: parsed.logicalRelations || [],
         intent: this.normalizeIntent(parsed.intent),
-        complexity: parsed.complexity || 'moderate',
+        complexity: entities.length > 2 ? 'complex' : entities.length > 0 ? 'moderate' : 'simple',
         confidence: parseFloat(parsed.confidence) || 0.8,
         keywords: parsed.keywords || [],
       };
     } catch (error) {
-      console.error('[CognitiveParser] 解析失败:', error);
-      // 降级处理：基于规则提取
-      return this.fallbackParse(query, preMappedEntities);
+      console.error('[CognitiveParser] LLM 解析失败，使用规则提取:', error);
+      // 降级处理：使用规则提取的实体
+      return this.fallbackParse(query, preMappedEntities, ruleBasedEntities);
     }
   }
 
@@ -535,23 +727,33 @@ export class CognitiveParser {
 
   private fallbackParse(
     query: string, 
-    preMappedEntities: { original: string; normalized: string; type: EntityType }[] = []
+    preMappedEntities: { original: string; normalized: string; type: EntityType }[] = [],
+    ruleBasedEntities: ExtractedEntity[] = []
   ): ParsedQuery {
     // 基于规则的简单提取
     const entities: ExtractedEntity[] = [];
     const keywords: string[] = [];
     const processedNames = new Set<string>();
 
-    // 首先添加预映射的实体（最高优先级）
+    // 首先添加规则提取的实体（最高优先级）
+    for (const ruleEntity of ruleBasedEntities) {
+      entities.push(ruleEntity);
+      processedNames.add(ruleEntity.name);
+      processedNames.add(ruleEntity.value);
+    }
+
+    // 然后添加预映射的实体
     for (const preEntity of preMappedEntities) {
-      entities.push({
-        name: preEntity.normalized,
-        type: preEntity.type,
-        value: preEntity.original,
-        confidence: 0.95,
-      });
-      processedNames.add(preEntity.original);
-      processedNames.add(preEntity.normalized);
+      if (!processedNames.has(preEntity.normalized)) {
+        entities.push({
+          name: preEntity.normalized,
+          type: preEntity.type,
+          value: preEntity.original,
+          confidence: 0.95,
+        });
+        processedNames.add(preEntity.original);
+        processedNames.add(preEntity.normalized);
+      }
     }
 
     // 提取引号中的内容作为实体
@@ -648,6 +850,25 @@ export class CognitiveParser {
       return {};
     }
   }
+
+  /**
+   * 合并规则提取和 LLM 提取的实体
+   * 规则提取的实体优先级更高
+   */
+  private mergeEntities(ruleEntities: ExtractedEntity[], llmEntities: ExtractedEntity[]): ExtractedEntity[] {
+    const merged: ExtractedEntity[] = [...ruleEntities];
+    const existingNames = new Set(ruleEntities.map(e => e.name.toLowerCase()));
+
+    for (const llmEntity of llmEntities) {
+      const nameLower = llmEntity.name.toLowerCase();
+      if (!existingNames.has(nameLower)) {
+        merged.push(llmEntity);
+        existingNames.add(nameLower);
+      }
+    }
+
+    return merged;
+  }
 }
 
 /**
@@ -676,11 +897,14 @@ export class StrategyController {
     const validated: ValidatedEntity[] = [];
 
     for (const entity of entities) {
+      console.log(`[StrategyController] 校验实体: "${entity.name}", 类型: ${entity.type}`);
+      
       // 获取候选实体
       const candidates = await this.entityMetadataStore.findSimilar(entity.name, entity.type, 5);
       
       if (candidates.length === 0) {
         // 没有候选，直接使用原始实体
+        console.log(`[StrategyController] 无候选实体，使用原始值`);
         validated.push({
           ...entity,
           isValid: true,
@@ -690,13 +914,33 @@ export class StrategyController {
         continue;
       }
 
-      // 快速规则匹配
-      const exactMatch = candidates.find(c => 
-        c.standardName.toLowerCase() === entity.name.toLowerCase() ||
+      console.log(`[StrategyController] 找到 ${candidates.length} 个候选: ${candidates.map(c => c.standardName).join(', ')}`);
+
+      // 优先查找别名匹配（用户输入的名称是某个实体的别名）
+      const aliasMatch = candidates.find(c => 
         c.aliases.some(a => a.toLowerCase() === entity.name.toLowerCase())
       );
 
+      if (aliasMatch) {
+        console.log(`[StrategyController] 别名匹配: "${entity.name}" -> "${aliasMatch.standardName}"`);
+        validated.push({
+          ...entity,
+          isValid: true,
+          normalizedName: aliasMatch.standardName,
+          matchScore: 1.0,
+          normalized: aliasMatch.standardName,
+          aliases: aliasMatch.aliases,
+        });
+        continue;
+      }
+
+      // 其次查找标准名称匹配
+      const exactMatch = candidates.find(c => 
+        c.standardName.toLowerCase() === entity.name.toLowerCase()
+      );
+
       if (exactMatch) {
+        console.log(`[StrategyController] 标准名称匹配: "${entity.name}" -> "${exactMatch.standardName}"`);
         validated.push({
           ...entity,
           isValid: true,
@@ -1015,7 +1259,9 @@ export class SearchExecutor {
    */
   async semanticSearch(query: string, topK: number = 10): Promise<SearchResult[]> {
     try {
+      console.log(`[SearchExecutor] 语义检索: "${query.substring(0, 50)}...", topK=${topK}, threshold=${this.config.similarityThreshold}`);
       const queryVector = await this.embeddings.embedQuery(query);
+      console.log(`[SearchExecutor] 生成查询向量完成, 维度: ${queryVector.length}`);
 
       // 获取 Milvus 客户端并执行搜索
       const milvus = await this.getMilvusClient();
@@ -1024,6 +1270,11 @@ export class SearchExecutor {
         topK,
         this.config.similarityThreshold
       );
+      
+      console.log(`[SearchExecutor] Milvus 返回 ${results.length} 个结果`);
+      if (results.length > 0) {
+        console.log(`[SearchExecutor] 第一个结果: score=${results[0].score}, contentLength=${results[0].content?.length}`);
+      }
 
       return results.map((r: MilvusSearchResult) => ({
         id: r.id,
@@ -1180,15 +1431,86 @@ export class SearchExecutor {
 
 /**
  * 第四层：数据基础设施层 - 实体元数据存储
+ * 支持持久化到文件系统
  */
 export class EntityMetadataStore {
   private entities: Map<string, EntityMetadata> = new Map();
   private embeddings: OllamaEmbeddings;
+  private persistPath: string;
+  private isInitialized: boolean = false;
 
-  constructor(embeddingModel: string) {
+  constructor(embeddingModel: string, persistPath?: string) {
     this.embeddings = new OllamaEmbeddings({ model: embeddingModel });
-    // 初始化一些常见的同义词映射
-    this.initializeDefaultMappings();
+    this.persistPath = persistPath || './data/entity-metadata.json';
+  }
+
+  /**
+   * 初始化：加载持久化数据或使用默认映射
+   */
+  async initialize(): Promise<void> {
+    if (this.isInitialized) return;
+    
+    const loaded = await this.loadFromFile();
+    if (!loaded) {
+      // 如果没有持久化数据，使用默认映射
+      this.initializeDefaultMappings();
+      await this.saveToFile();
+    }
+    this.isInitialized = true;
+  }
+
+  /**
+   * 从文件加载实体数据
+   */
+  private async loadFromFile(): Promise<boolean> {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      
+      const fullPath = path.resolve(process.cwd(), this.persistPath);
+      const data = await fs.readFile(fullPath, 'utf-8');
+      const parsed = JSON.parse(data);
+      
+      if (parsed.entities && Array.isArray(parsed.entities)) {
+        this.entities.clear();
+        for (const entity of parsed.entities) {
+          this.entities.set(entity.standardName.toLowerCase(), entity);
+        }
+        console.log(`[EntityMetadataStore] 从文件加载了 ${this.entities.size} 个实体`);
+        return true;
+      }
+      return false;
+    } catch (error) {
+      console.log('[EntityMetadataStore] 无持久化文件，将使用默认映射');
+      return false;
+    }
+  }
+
+  /**
+   * 保存实体数据到文件
+   */
+  async saveToFile(): Promise<void> {
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      
+      const fullPath = path.resolve(process.cwd(), this.persistPath);
+      const dir = path.dirname(fullPath);
+      
+      // 确保目录存在
+      await fs.mkdir(dir, { recursive: true });
+      
+      const data = {
+        version: '1.0',
+        updatedAt: new Date().toISOString(),
+        entities: Array.from(this.entities.values()),
+      };
+      
+      await fs.writeFile(fullPath, JSON.stringify(data, null, 2), 'utf-8');
+      console.log(`[EntityMetadataStore] 保存了 ${this.entities.size} 个实体到文件`);
+    } catch (error) {
+      console.error('[EntityMetadataStore] 保存失败:', error);
+    }
   }
 
   private initializeDefaultMappings() {
@@ -1264,42 +1586,137 @@ export class EntityMetadataStore {
     });
   }
 
-  addEntity(metadata: EntityMetadata): void {
+  addEntity(metadata: EntityMetadata, persist: boolean = false): void {
+    // 使用标准名称作为主键存储
     this.entities.set(metadata.standardName.toLowerCase(), metadata);
+    
+    console.log(`[EntityMetadataStore] 添加实体: ${metadata.standardName}, 类型: ${metadata.type}, 别名: ${metadata.aliases.join(', ')}`);
+    
+    // 如果需要持久化，保存到文件
+    if (persist) {
+      this.saveToFile().catch(err => console.error('[EntityMetadataStore] 持久化失败:', err));
+    }
+  }
+
+  /**
+   * 删除实体
+   */
+  removeEntity(standardName: string, persist: boolean = false): boolean {
+    const key = standardName.toLowerCase();
+    const deleted = this.entities.delete(key);
+    
+    if (deleted) {
+      console.log(`[EntityMetadataStore] 删除实体: ${standardName}`);
+      if (persist) {
+        this.saveToFile().catch(err => console.error('[EntityMetadataStore] 持久化失败:', err));
+      }
+    }
+    return deleted;
+  }
+
+  /**
+   * 更新实体
+   */
+  updateEntity(standardName: string, updates: Partial<EntityMetadata>, persist: boolean = false): boolean {
+    const key = standardName.toLowerCase();
+    const existing = this.entities.get(key);
+    
+    if (existing) {
+      const updated = { ...existing, ...updates };
+      this.entities.set(key, updated);
+      console.log(`[EntityMetadataStore] 更新实体: ${standardName}`);
+      if (persist) {
+        this.saveToFile().catch(err => console.error('[EntityMetadataStore] 持久化失败:', err));
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 清空所有实体（保留默认映射）
+   */
+  async reset(): Promise<void> {
+    this.entities.clear();
+    this.initializeDefaultMappings();
+    await this.saveToFile();
+    console.log('[EntityMetadataStore] 已重置为默认映射');
   }
 
   async findSimilar(name: string, type: EntityType, topK: number = 5): Promise<EntityMetadata[]> {
-    const candidates: EntityMetadata[] = [];
+    const exactTypeMatches: EntityMetadata[] = [];  // 类型完全匹配的
+    const aliasMatches: EntityMetadata[] = [];      // 别名匹配的（优先级高）
+    const fuzzyMatches: EntityMetadata[] = [];      // 模糊匹配的
     const lowerName = name.toLowerCase();
 
-    // 精确匹配
-    if (this.entities.has(lowerName)) {
-      candidates.push(this.entities.get(lowerName)!);
-    }
+    console.log(`[EntityMetadataStore] 查找实体: "${name}", 类型: ${type}`);
 
-    // 别名匹配
-    for (const [, metadata] of this.entities) {
-      if (metadata.type === type || type === 'OTHER') {
-        if (metadata.aliases.some(a => a.toLowerCase() === lowerName)) {
-          if (!candidates.find(c => c.standardName === metadata.standardName)) {
-            candidates.push(metadata);
+    // 遍历所有实体
+    for (const [key, metadata] of this.entities) {
+      // 1. 别名精确匹配（优先级最高）
+      if (metadata.aliases.some(a => a.toLowerCase() === lowerName)) {
+        console.log(`[EntityMetadataStore] 找到别名匹配: "${name}" -> "${metadata.standardName}"`);
+        // 类型匹配的优先
+        if (metadata.type === type || metadata.type === 'PERSON' && type === 'OTHER' || type === 'PERSON' && metadata.type === 'OTHER') {
+          if (!exactTypeMatches.find(c => c.standardName === metadata.standardName)) {
+            exactTypeMatches.unshift(metadata); // 添加到最前面
+          }
+        } else {
+          if (!aliasMatches.find(c => c.standardName === metadata.standardName)) {
+            aliasMatches.push(metadata);
+          }
+        }
+        continue;
+      }
+
+      // 2. 标准名称精确匹配
+      if (key === lowerName) {
+        // 如果类型匹配，高优先级
+        if (metadata.type === type) {
+          if (!exactTypeMatches.find(c => c.standardName === metadata.standardName)) {
+            exactTypeMatches.push(metadata);
+          }
+        } else {
+          // 类型不匹配，低优先级
+          if (!fuzzyMatches.find(c => c.standardName === metadata.standardName)) {
+            fuzzyMatches.push(metadata);
+          }
+        }
+        continue;
+      }
+
+      // 3. 模糊匹配
+      const typeCompatible = metadata.type === type || type === 'OTHER' || metadata.type === 'OTHER';
+      if (typeCompatible) {
+        const similarity = this.calculateSimilarity(lowerName, key);
+        if (similarity > 0.5 && !fuzzyMatches.find(c => c.standardName === metadata.standardName)) {
+          fuzzyMatches.push(metadata);
+        }
+        
+        // 检查与别名的相似度
+        for (const alias of metadata.aliases) {
+          const aliasSimilarity = this.calculateSimilarity(lowerName, alias.toLowerCase());
+          if (aliasSimilarity > 0.6 && !fuzzyMatches.find(c => c.standardName === metadata.standardName)) {
+            fuzzyMatches.push(metadata);
+            break;
           }
         }
       }
     }
 
-    // 模糊匹配（编辑距离）
-    for (const [key, metadata] of this.entities) {
-      if (candidates.length >= topK) break;
-      if (candidates.find(c => c.standardName === metadata.standardName)) continue;
-
-      const similarity = this.calculateSimilarity(lowerName, key);
-      if (similarity > 0.6) {
-        candidates.push(metadata);
+    // 合并结果：别名精确匹配 > 类型匹配 > 模糊匹配
+    const candidates = [...exactTypeMatches, ...aliasMatches, ...fuzzyMatches];
+    
+    // 去重
+    const uniqueCandidates: EntityMetadata[] = [];
+    for (const c of candidates) {
+      if (!uniqueCandidates.find(u => u.standardName === c.standardName)) {
+        uniqueCandidates.push(c);
       }
     }
 
-    return candidates.slice(0, topK);
+    console.log(`[EntityMetadataStore] 返回 ${Math.min(uniqueCandidates.length, topK)} 个候选实体`);
+    return uniqueCandidates.slice(0, topK);
   }
 
   private calculateSimilarity(a: string, b: string): number {
@@ -1337,7 +1754,9 @@ export class ResponseGenerator {
     query: ParsedQuery,
     results: RankedResult[]
   ): Promise<string> {
+    console.log(`[ResponseGenerator] 收到 ${results.length} 个结果进行生成`);
     if (results.length === 0) {
+      console.log('[ResponseGenerator] 无结果，返回默认消息');
       return '抱歉，未能找到与您问题相关的信息。请尝试使用不同的关键词或更简洁的表述。';
     }
 
@@ -1374,11 +1793,14 @@ export class AdaptiveEntityRAG {
   private searchExecutor: SearchExecutor;
   private entityMetadataStore: EntityMetadataStore;
   private responseGenerator: ResponseGenerator;
+  private initialized: boolean = false;
 
   constructor(config: Partial<AdaptiveRAGConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     
-    this.entityMetadataStore = new EntityMetadataStore(this.config.embeddingModel);
+    // 使用持久化路径
+    const persistPath = './data/adaptive-entity-metadata.json';
+    this.entityMetadataStore = new EntityMetadataStore(this.config.embeddingModel, persistPath);
     this.cognitiveParser = new CognitiveParser(this.config.llmModel);
     this.strategyController = new StrategyController(this.config, this.entityMetadataStore);
     this.searchExecutor = new SearchExecutor(this.config);
@@ -1386,16 +1808,53 @@ export class AdaptiveEntityRAG {
   }
 
   /**
+   * 初始化（加载持久化数据）
+   */
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+    await this.entityMetadataStore.initialize();
+    this.initialized = true;
+    console.log('[AdaptiveEntityRAG] 系统已初始化');
+  }
+
+  /**
+   * 确保已初始化
+   */
+  private async ensureInitialized(): Promise<void> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+  }
+
+  /**
    * 执行完整的 RAG 流程
    */
   async query(question: string, topK: number = 5): Promise<WorkflowState> {
+    // 确保已初始化（加载持久化数据）
+    await this.ensureInitialized();
+    
     const startTime = Date.now();
     const steps: WorkflowStep[] = [];
 
+    // 初始化时提供有意义的默认值，即使后续出错也能返回
     let state: WorkflowState = {
-      query: {} as ParsedQuery,
+      query: {
+        originalQuery: question,
+        entities: [],
+        logicalRelations: [],
+        intent: 'factual',
+        complexity: 'simple',
+        confidence: 0.5,
+        keywords: [],
+      },
       validatedEntities: [],
-      currentDecision: {} as RoutingDecision,
+      currentDecision: {
+        action: 'semantic_search',
+        constraints: [],
+        retryCount: 0,
+        maxRetries: this.config.maxRetries,
+        reason: '初始化',
+      },
       searchResults: [],
       rankedResults: [],
       finalResponse: '',
@@ -1414,9 +1873,31 @@ export class AdaptiveEntityRAG {
       parseStep.duration = Date.now() - parseStart;
       parseStep.status = 'completed';
       parseStep.details = {
-        entities: state.query.entities.length,
+        // 基础统计
+        entityCount: state.query.entities.length,
         intent: state.query.intent,
         complexity: state.query.complexity,
+        confidence: state.query.confidence,
+        keywordCount: state.query.keywords.length,
+        // 详细操作
+        operations: [
+          `输入查询: "${question}"`,
+          `使用 LLM 模型: ${this.config.llmModel}`,
+          state.query.entities.length > 0 
+            ? `提取实体: ${state.query.entities.map(e => `${e.name}(${e.type})`).join(', ')}`
+            : '未检测到命名实体',
+          `识别意图: ${this.getIntentDescription(state.query.intent)}`,
+          `复杂度评估: ${state.query.complexity}`,
+          `提取关键词: ${state.query.keywords.join(', ') || '无'}`,
+        ],
+        // 原始数据
+        extractedEntities: state.query.entities.map(e => ({
+          name: e.name,
+          type: e.type,
+          confidence: e.confidence,
+        })),
+        keywords: state.query.keywords,
+        logicalRelations: state.query.logicalRelations,
       };
 
       // Step 2: 实体校验
@@ -1428,9 +1909,37 @@ export class AdaptiveEntityRAG {
       state.validatedEntities = await this.strategyController.validateEntities(state.query.entities);
       validateStep.duration = Date.now() - validateStart;
       validateStep.status = 'completed';
+      
+      // 构建详细的校验操作描述
+      const validationOperations: string[] = [];
+      if (state.query.entities.length === 0) {
+        validationOperations.push('无实体需要校验');
+      } else {
+        validationOperations.push(`待校验实体数: ${state.query.entities.length}`);
+        for (const ve of state.validatedEntities) {
+          if (ve.normalizedName && ve.normalizedName !== ve.name) {
+            validationOperations.push(`✓ "${ve.name}" → "${ve.normalizedName}" (别名匹配)`);
+          } else if (ve.isValid) {
+            validationOperations.push(`✓ "${ve.name}" 已验证 (置信度: ${((ve.matchScore || 1) * 100).toFixed(0)}%)`);
+          } else {
+            validationOperations.push(`✗ "${ve.name}" 未找到匹配实体`);
+          }
+        }
+      }
+      
       validateStep.details = {
-        validated: state.validatedEntities.filter(e => e.isValid).length,
-        total: state.validatedEntities.length,
+        validatedCount: state.validatedEntities.filter(e => e.isValid).length,
+        totalCount: state.validatedEntities.length,
+        normalizedCount: state.validatedEntities.filter(e => e.normalizedName && e.normalizedName !== e.name).length,
+        operations: validationOperations,
+        validatedEntities: state.validatedEntities.map(e => ({
+          original: e.name,
+          normalized: e.normalizedName,
+          type: e.type,
+          isValid: e.isValid,
+          matchScore: e.matchScore,
+          aliases: e.aliases,
+        })),
       };
 
       // Step 3: 路由决策与检索循环
@@ -1439,7 +1948,7 @@ export class AdaptiveEntityRAG {
 
       while (retryCount <= this.config.maxRetries) {
         // 做出路由决策
-        const routingStep = this.createStep(`路由决策 (尝试 ${retryCount + 1})`);
+        const routingStep = this.createStep(`路由决策${retryCount > 0 ? ` (重试 ${retryCount})` : ''}`);
         steps.push(routingStep);
         routingStep.status = 'running';
 
@@ -1450,11 +1959,34 @@ export class AdaptiveEntityRAG {
           results.length
         );
 
+        // 构建路由决策的详细操作描述
+        const routingOperations: string[] = [
+          `分析查询复杂度: ${state.query.complexity}`,
+          `有效实体数: ${state.validatedEntities.filter(e => e.isValid).length}`,
+          `决策结果: ${this.getSearchTypeName(state.currentDecision.action)}`,
+          `决策原因: ${state.currentDecision.reason}`,
+        ];
+        
+        if (state.currentDecision.constraints.length > 0) {
+          routingOperations.push(`约束条件: ${state.currentDecision.constraints.map(c => 
+            `${c.field}${c.operator}${c.value}`
+          ).join(', ')}`);
+        }
+        
+        if (state.currentDecision.relaxedConstraints && state.currentDecision.relaxedConstraints.length > 0) {
+          routingOperations.push(`松弛约束: ${state.currentDecision.relaxedConstraints.join(', ')}`);
+        }
+
         routingStep.status = 'completed';
         routingStep.details = {
           action: state.currentDecision.action,
+          actionName: this.getSearchTypeName(state.currentDecision.action),
           reason: state.currentDecision.reason,
           constraintCount: state.currentDecision.constraints.length,
+          retryCount: retryCount,
+          operations: routingOperations,
+          constraints: state.currentDecision.constraints,
+          relaxedConstraints: state.currentDecision.relaxedConstraints,
         };
 
         // 如果决定生成响应，跳出循环
@@ -1463,14 +1995,24 @@ export class AdaptiveEntityRAG {
         }
 
         // 执行检索
-        const searchStep = this.createStep(`执行${this.getSearchTypeName(state.currentDecision.action)}`);
+        const searchTypeName = this.getSearchTypeName(state.currentDecision.action);
+        const searchStep = this.createStep(`执行${searchTypeName}`);
         steps.push(searchStep);
         searchStep.status = 'running';
 
         const searchStart = Date.now();
+        const searchOperations: string[] = [
+          `检索类型: ${searchTypeName}`,
+          `目标数量: ${topK * 2}`,
+          `使用 Embedding 模型: ${this.config.embeddingModel}`,
+          `Milvus 集合: ${this.config.milvusCollection}`,
+        ];
 
         switch (state.currentDecision.action) {
           case 'structured_search':
+            searchOperations.push(`结构化过滤: ${state.currentDecision.constraints.map(c => 
+              `${c.field}${c.operator}${c.value}`
+            ).join(' AND ')}`);
             results = await this.searchExecutor.structuredSearch(
               question,
               state.currentDecision.constraints,
@@ -1478,9 +2020,14 @@ export class AdaptiveEntityRAG {
             );
             break;
           case 'semantic_search':
+            searchOperations.push('纯语义向量检索（无过滤条件）');
             results = await this.searchExecutor.semanticSearch(question, topK * 2);
             break;
           case 'hybrid_search':
+            searchOperations.push('混合检索: 结构化过滤 + 语义检索');
+            searchOperations.push(`过滤条件: ${state.currentDecision.constraints.map(c => 
+              `${c.field}${c.operator}${c.value}`
+            ).join(' AND ')}`);
             results = await this.searchExecutor.hybridSearch(
               question,
               state.currentDecision.constraints,
@@ -1488,7 +2035,10 @@ export class AdaptiveEntityRAG {
             );
             break;
           case 'relax_constraints':
-            // 约束松弛后重新进行结构化检索
+            searchOperations.push('约束松弛后重新检索');
+            if (state.currentDecision.relaxedConstraints) {
+              searchOperations.push(`已松弛: ${state.currentDecision.relaxedConstraints.join(', ')}`);
+            }
             results = await this.searchExecutor.structuredSearch(
               question,
               state.currentDecision.constraints,
@@ -1498,10 +2048,29 @@ export class AdaptiveEntityRAG {
         }
 
         searchStep.duration = Date.now() - searchStart;
+        searchOperations.push(`检索耗时: ${searchStep.duration}ms`);
+        searchOperations.push(`返回结果: ${results.length} 条`);
+        
+        // 添加 Top 3 结果预览
+        if (results.length > 0) {
+          searchOperations.push('--- Top 3 结果预览 ---');
+          results.slice(0, 3).forEach((r, i) => {
+            searchOperations.push(`[${i + 1}] 相似度: ${(r.score * 100).toFixed(1)}% | ${r.content.substring(0, 50)}...`);
+          });
+        }
+        
         searchStep.status = 'completed';
         searchStep.details = {
           resultCount: results.length,
           matchType: state.currentDecision.action,
+          matchTypeName: searchTypeName,
+          operations: searchOperations,
+          topResults: results.slice(0, 5).map(r => ({
+            id: r.id,
+            score: r.score,
+            contentPreview: r.content.substring(0, 100),
+            matchType: r.matchType,
+          })),
         };
 
         state.searchResults = results;
@@ -1515,27 +2084,79 @@ export class AdaptiveEntityRAG {
       }
 
       // Step 4: 重排序
+      console.log(`[AdaptiveEntityRAG] 搜索结果数量: ${state.searchResults.length}`);
+      const rerankStep = this.createStep('混合重排序');
+      steps.push(rerankStep);
+      
+      const rerankOperations: string[] = [];
+      
       if (state.searchResults.length > 0) {
-        const rerankStep = this.createStep('混合重排序');
-        steps.push(rerankStep);
         rerankStep.status = this.config.enableReranking ? 'running' : 'skipped';
 
         if (this.config.enableReranking) {
+          rerankOperations.push(`输入结果数: ${state.searchResults.length}`);
+          rerankOperations.push(`目标输出数: ${topK}`);
+          rerankOperations.push('使用 LLM 进行相关性重排序');
+          
           const rerankStart = Date.now();
           state.rankedResults = await this.searchExecutor.rerank(state.searchResults, state.query, topK);
           rerankStep.duration = Date.now() - rerankStart;
           rerankStep.status = 'completed';
+          
+          rerankOperations.push(`重排序耗时: ${rerankStep.duration}ms`);
+          rerankOperations.push(`输出结果数: ${state.rankedResults.length}`);
+          
+          // 显示重排序前后的变化
+          if (state.rankedResults.length > 0) {
+            rerankOperations.push('--- 重排序结果 ---');
+            state.rankedResults.slice(0, 3).forEach((r, i) => {
+              const originalScore = (r.score * 100).toFixed(1);
+              const newScore = (r.rerankedScore * 100).toFixed(1);
+              rerankOperations.push(`[${i + 1}] ${originalScore}% → ${newScore}% | ${r.relevanceExplanation || ''}`);
+            });
+          }
+          
           rerankStep.details = {
             inputCount: state.searchResults.length,
             outputCount: state.rankedResults.length,
+            enabled: true,
+            operations: rerankOperations,
+            rankedResults: state.rankedResults.slice(0, 5).map(r => ({
+              id: r.id,
+              originalScore: r.score,
+              rerankedScore: r.rerankedScore,
+              explanation: r.relevanceExplanation,
+            })),
           };
         } else {
+          rerankOperations.push('重排序已禁用');
+          rerankOperations.push('直接使用原始相似度分数');
+          
           state.rankedResults = state.searchResults.map(r => ({
             ...r,
             rerankedScore: r.score,
             relevanceExplanation: '未启用重排序',
           }));
+          
+          rerankStep.details = {
+            inputCount: state.searchResults.length,
+            outputCount: state.rankedResults.length,
+            enabled: false,
+            operations: rerankOperations,
+          };
         }
+        console.log(`[AdaptiveEntityRAG] 重排序后结果数量: ${state.rankedResults.length}`);
+      } else {
+        rerankStep.status = 'skipped';
+        rerankOperations.push('⚠️ 无搜索结果，跳过重排序');
+        rerankStep.details = {
+          inputCount: 0,
+          outputCount: 0,
+          enabled: false,
+          operations: rerankOperations,
+          reason: '搜索结果为空',
+        };
+        console.log('[AdaptiveEntityRAG] ⚠️ 搜索结果为空！');
       }
 
       // Step 5: 生成响应
@@ -1543,10 +2164,36 @@ export class AdaptiveEntityRAG {
       steps.push(generateStep);
       generateStep.status = 'running';
 
+      const generateOperations: string[] = [
+        `使用 LLM 模型: ${this.config.llmModel}`,
+        `输入上下文数: ${state.rankedResults.length}`,
+        `查询意图: ${state.query.intent}`,
+      ];
+      
+      if (state.rankedResults.length > 0) {
+        generateOperations.push('--- 上下文来源 ---');
+        state.rankedResults.slice(0, 3).forEach((r, i) => {
+          generateOperations.push(`[${i + 1}] 相关度: ${(r.rerankedScore * 100).toFixed(1)}%`);
+        });
+      } else {
+        generateOperations.push('⚠️ 无上下文，将返回默认响应');
+      }
+
       const generateStart = Date.now();
       state.finalResponse = await this.responseGenerator.generate(state.query, state.rankedResults);
       generateStep.duration = Date.now() - generateStart;
       generateStep.status = 'completed';
+      
+      generateOperations.push(`生成耗时: ${generateStep.duration}ms`);
+      generateOperations.push(`响应长度: ${state.finalResponse.length} 字符`);
+      
+      generateStep.details = {
+        contextCount: state.rankedResults.length,
+        responseLength: state.finalResponse.length,
+        llmModel: this.config.llmModel,
+        intent: state.query.intent,
+        operations: generateOperations,
+      };
 
     } catch (error) {
       console.error('[AdaptiveEntityRAG] 查询失败:', error);
@@ -1577,22 +2224,47 @@ export class AdaptiveEntityRAG {
       semantic_search: '语义检索',
       hybrid_search: '混合检索',
       relax_constraints: '松弛约束检索',
+      generate_response: '生成响应',
     };
     return names[action] || '检索';
+  }
+
+  private getIntentDescription(intent: string): string {
+    const descriptions: Record<string, string> = {
+      factual: '事实查询 - 寻求具体事实或数据',
+      conceptual: '概念理解 - 理解概念或原理',
+      comparison: '对比分析 - 比较多个对象',
+      procedural: '操作指导 - 寻求方法步骤',
+      exploratory: '探索性查询 - 开放式探索',
+    };
+    return descriptions[intent] || intent;
   }
 
   /**
    * 获取实体元数据存储
    */
   getEntityMetadataStore(): EntityMetadataStore {
+    // 同步初始化（如果尚未初始化）
+    if (!this.initialized) {
+      // 触发异步初始化，但不等待
+      this.initialize().catch(err => console.error('[AdaptiveEntityRAG] 初始化失败:', err));
+    }
+    return this.entityMetadataStore;
+  }
+
+  /**
+   * 异步获取实体元数据存储（确保已初始化）
+   */
+  async getEntityMetadataStoreAsync(): Promise<EntityMetadataStore> {
+    await this.ensureInitialized();
     return this.entityMetadataStore;
   }
 
   /**
    * 添加自定义实体映射
    */
-  addEntityMapping(metadata: EntityMetadata): void {
-    this.entityMetadataStore.addEntity(metadata);
+  addEntityMapping(metadata: EntityMetadata, persist: boolean = false): void {
+    this.entityMetadataStore.addEntity(metadata, persist);
   }
 }
 

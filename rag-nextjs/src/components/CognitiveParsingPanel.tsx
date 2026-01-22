@@ -351,7 +351,7 @@ export default function CognitiveParsingPanel({
                         className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs ${config.bg} ${config.color}`}
                       >
                         <i className={`fas ${config.icon}`}></i>
-                        {config.label}: {count}
+                        {config.label}: {String(count)}
                       </span>
                     );
                   })}
@@ -471,7 +471,7 @@ export default function CognitiveParsingPanel({
                           <span className={`text-sm font-medium ${opConfig.color}`}>{opConfig.label}</span>
                         </div>
                         <div className="flex flex-wrap gap-2 items-center">
-                          {relation.entities.map((entityName, eIdx) => {
+                          {(relation.entities || []).map((entityName, eIdx) => {
                             const entity = queryAnalysis.entities?.find(e => e.name === entityName);
                             const entityConfig = entity ? ENTITY_TYPE_CONFIG[entity.type] : ENTITY_TYPE_CONFIG.OTHER;
                             return (

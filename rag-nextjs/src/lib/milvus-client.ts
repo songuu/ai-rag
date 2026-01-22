@@ -461,15 +461,27 @@ export class MilvusVectorStore {
       return [];
     }
     
+    let filteredCount = 0;
     for (const hit of hits) {
       // 计算相似度 (根据度量类型转换)
       let similarity: number;
-      const distance = (hit as any).score || (hit as any).distance || 0;
+      const rawScore = (hit as any).score;
+      const rawDistance = (hit as any).distance;
+      const distance = rawScore ?? rawDistance ?? 0;
       
       switch (this.config.metricType) {
         case 'COSINE':
-          // Milvus COSINE 返回的是 1 - cosine_similarity
-          similarity = 1 - distance;
+          // Milvus COSINE 度量：
+          // - SDK 2.x 返回的 score 是相似度（0-1，越大越相似）
+          // - 如果返回的是 distance，则是 1 - cosine_similarity
+          // 判断：如果值在合理的相似度范围（0-1）且更可能是相似度，则直接使用
+          if (rawScore !== undefined && rawScore >= 0 && rawScore <= 1) {
+            // score 字段存在且在 [0,1] 范围内，视为相似度
+            similarity = rawScore;
+          } else {
+            // 否则视为距离，进行转换
+            similarity = 1 - distance;
+          }
           break;
         case 'IP':
           // Inner Product，越大越相似
@@ -485,6 +497,7 @@ export class MilvusVectorStore {
 
       // 应用阈值过滤
       if (similarity < threshold) {
+        filteredCount++;
         continue;
       }
 
@@ -504,6 +517,11 @@ export class MilvusVectorStore {
         distance: distance,
       });
     }
+    
+    if (filteredCount > 0) {
+      console.log(`[Milvus] 阈值过滤: ${filteredCount} 个结果低于阈值 ${threshold}`);
+    }
+    console.log(`[Milvus] 返回 ${searchResults.length} 个结果 (threshold=${threshold})`);
 
     return searchResults;
   }

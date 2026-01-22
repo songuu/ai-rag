@@ -18,6 +18,7 @@ import IntentDistillationPanel from '@/components/IntentDistillationPanel';
 import MilvusQueryVisualizer from '@/components/MilvusQueryVisualizer';
 import AgenticWorkflowPanel from '@/components/AgenticWorkflowPanel';
 import LangSmithTraceViewer from '@/components/LangSmithTraceViewer';
+import AdaptiveEntityWorkflowPanel from '@/components/AdaptiveEntityWorkflowPanel';
 
 interface Message {
   id: string;
@@ -87,6 +88,15 @@ export default function HomePage() {
   const [agenticRetrievalGrade, setAgenticRetrievalGrade] = useState<any>(null);
   const [agenticDebugInfo, setAgenticDebugInfo] = useState<any>(null);
   const [showAgenticPanel, setShowAgenticPanel] = useState(false);
+
+  // 自适应实体路由 RAG 相关状态
+  const [useAdaptiveEntityRAG, setUseAdaptiveEntityRAG] = useState(false);
+  const [adaptiveEntityWorkflow, setAdaptiveEntityWorkflow] = useState<any>(null);
+  const [adaptiveEntityQueryAnalysis, setAdaptiveEntityQueryAnalysis] = useState<any>(null);
+  const [adaptiveEntityValidation, setAdaptiveEntityValidation] = useState<any>(null);
+  const [adaptiveEntityRoutingDecision, setAdaptiveEntityRoutingDecision] = useState<any>(null);
+  const [adaptiveEntityRetrievalDetails, setAdaptiveEntityRetrievalDetails] = useState<any>(null);
+  const [showAdaptiveEntityPanel, setShowAdaptiveEntityPanel] = useState(false);
 
   const socketRef = useRef<Socket | null>(null);
 
@@ -539,20 +549,107 @@ export default function HomePage() {
     }
   };
 
-  // 生成模拟 Token
+  // 生成模拟 Token（智能分词）
   const generateMockTokens = (text: string) => {
     const tokens: any[] = [];
-    for (let i = 0; i < text.length; i++) {
-      const char = text[i];
+    // 使用简单规则分词：中文按字符，英文按单词，数字按连续数字
+    const pattern = /[\u4e00-\u9fff]|[a-zA-Z]+|[0-9]+|[.,!?:;()\-？！。，、；：（）]/g;
+    let match;
+    let tokenId = 1000;
+    
+    while ((match = pattern.exec(text)) !== null) {
+      const token = match[0];
       tokens.push({
-        token: char,
-        tokenId: Math.floor(Math.random() * 5000) + 1000,
-        type: /[\u4e00-\u9fff]/.test(char) ? 'chinese' :
-          /[a-zA-Z]/.test(char) ? 'english' :
-            /[0-9]/.test(char) ? 'number' :
-              /[.,!?:;()]/.test(char) ? 'punctuation' : 'special'
+        token: token,
+        tokenId: tokenId++,
+        type: /[\u4e00-\u9fff]/.test(token) ? 'chinese' :
+          /[a-zA-Z]/.test(token) ? 'english' :
+          /[0-9]/.test(token) ? 'number' :
+          /[.,!?:;()\-？！。，、；：（）]/.test(token) ? 'punctuation' : 'special'
       });
     }
+    return tokens;
+  };
+  
+  // 生成基于实体和关键词的增强 Token
+  const generateEnhancedTokens = (text: string, entities?: any[], keywords?: string[]) => {
+    const MAX_TOKENS = 100; // 限制最大 Token 数量
+    const tokens: any[] = [];
+    let tokenId = 1000;
+    
+    // 安全检查：限制输入长度
+    const safeText = (text || '').slice(0, 500);
+    if (!safeText) return tokens;
+    
+    // 收集实体和关键词，过滤无效值
+    const specialTerms = new Set<string>();
+    if (entities && Array.isArray(entities)) {
+      entities.forEach(e => {
+        if (e?.name && typeof e.name === 'string' && e.name.trim()) {
+          specialTerms.add(e.name.trim());
+        }
+      });
+    }
+    if (keywords && Array.isArray(keywords)) {
+      keywords.forEach(k => {
+        if (k && typeof k === 'string' && k.trim()) {
+          specialTerms.add(k.trim());
+        }
+      });
+    }
+    
+    // 排序，长的优先匹配，过滤空字符串
+    const sortedTerms = Array.from(specialTerms)
+      .filter(t => t.length > 0)
+      .sort((a, b) => b.length - a.length);
+    
+    let remaining = safeText;
+    let iterations = 0;
+    const MAX_ITERATIONS = 1000; // 防止无限循环
+    
+    while (remaining.length > 0 && tokens.length < MAX_TOKENS && iterations < MAX_ITERATIONS) {
+      iterations++;
+      let matched = false;
+      
+      // 尝试匹配特殊词
+      for (const term of sortedTerms) {
+        if (term && remaining.startsWith(term)) {
+          const entity = entities?.find(e => e?.name === term);
+          tokens.push({
+            token: term,
+            tokenId: tokenId++,
+            type: entity ? 'entity' : 'keyword',
+            entityType: entity?.type,
+            confidence: entity?.confidence,
+          });
+          remaining = remaining.slice(term.length);
+          matched = true;
+          break;
+        }
+      }
+      
+      if (!matched) {
+        const char = remaining[0];
+        // 空白字符跳过
+        if (/\s/.test(char)) {
+          remaining = remaining.slice(1);
+          continue;
+        }
+        
+        const type = /[\u4e00-\u9fff]/.test(char) ? 'chinese' :
+          /[a-zA-Z]/.test(char) ? 'english' :
+          /[0-9]/.test(char) ? 'number' :
+          /[.,!?:;()\-？！。，、；：（）]/.test(char) ? 'punctuation' : 'special';
+        
+        tokens.push({
+          token: char,
+          tokenId: tokenId++,
+          type: type,
+        });
+        remaining = remaining.slice(1);
+      }
+    }
+    
     return tokens;
   };
 
@@ -595,6 +692,16 @@ export default function HomePage() {
         setShowAgenticPanel(true);
       }
 
+      // 清空之前的自适应实体 RAG 状态
+      if (useAdaptiveEntityRAG) {
+        setAdaptiveEntityWorkflow(null);
+        setAdaptiveEntityQueryAnalysis(null);
+        setAdaptiveEntityValidation(null);
+        setAdaptiveEntityRoutingDecision(null);
+        setAdaptiveEntityRetrievalDetails(null);
+        setShowAdaptiveEntityPanel(true);
+      }
+
       const response = await fetch('/api/ask', {
         method: 'POST',
         headers: {
@@ -609,14 +716,25 @@ export default function HomePage() {
           userId: 'demo-user',
           sessionId: 'demo-session',
           storageBackend,
-          useAgenticRAG: useAgenticRAG && storageBackend === 'milvus', // 只有 Milvus 后端支持 Agentic RAG
+          useAgenticRAG: useAgenticRAG && storageBackend === 'milvus' && !useAdaptiveEntityRAG, // 只有 Milvus 后端支持 Agentic RAG
+          useAdaptiveEntityRAG: useAdaptiveEntityRAG && storageBackend === 'milvus', // 只有 Milvus 后端支持自适应实体 RAG
           maxRetries: 2,
+          enableReranking: true,
         }),
       });
 
       const data = await response.json();
 
       console.log('data', data);
+
+      // 处理自适应实体 RAG 响应
+      if (data.adaptiveEntityMode) {
+        setAdaptiveEntityWorkflow(data.workflow);
+        setAdaptiveEntityQueryAnalysis(data.queryAnalysis);
+        setAdaptiveEntityValidation(data.entityValidation);
+        setAdaptiveEntityRoutingDecision(data.routingDecision);
+        setAdaptiveEntityRetrievalDetails(data.retrievalDetails);
+      }
 
       // 处理 Agentic RAG 响应
       if (data.agenticMode) {
@@ -631,13 +749,68 @@ export default function HomePage() {
 
       if (data.success) {
         let queryAnalysisData: any;
+        // 重要：始终使用用户原始输入，防止 LLM 返回错误的 originalQuery
+        const userOriginalInput = input.trim();
         
+        // 处理自适应实体 RAG 模式的查询分析数据
+        if (data.adaptiveEntityMode && data.queryAnalysis) {
+          const adaptiveAnalysis = data.queryAnalysis;
+          // 使用增强的 Token 生成，突出显示实体和关键词
+          const enhancedTokens = generateEnhancedTokens(
+            userOriginalInput, 
+            adaptiveAnalysis.entities, 
+            adaptiveAnalysis.keywords
+          );
+          queryAnalysisData = {
+            tokenization: {
+              tokenCount: enhancedTokens.length,
+              tokens: enhancedTokens,
+              processingTime: data.workflow?.steps?.find((s: any) => s.step?.includes('认知解析'))?.duration || 0,
+              originalText: userOriginalInput
+            },
+            embedding: {
+              embeddingDimension: 768,
+              semanticAnalysis: {
+                context: adaptiveAnalysis.intent === 'factual' ? '事实查询语境' :
+                         adaptiveAnalysis.intent === 'exploratory' ? '探索性语境' :
+                         adaptiveAnalysis.intent === 'comparison' ? '比较分析语境' :
+                         adaptiveAnalysis.intent === 'conceptual' ? '概念理解语境' :
+                         adaptiveAnalysis.intent === 'procedural' ? '操作指导语境' : '通用语境',
+                semanticCategory: adaptiveAnalysis.intent || '一般',
+                confidence: adaptiveAnalysis.confidence || 0.8,
+                nearestConcepts: adaptiveAnalysis.keywords || [],
+                vectorFeatures: {
+                  techScore: adaptiveAnalysis.intent === 'factual' ? 0.7 : 0.4,
+                  businessScore: 0.3,
+                  dailyScore: adaptiveAnalysis.complexity === 'simple' ? 0.6 : 0.3,
+                  emotionScore: 0.1,
+                  vectorMagnitude: 1.2
+                }
+              }
+            },
+            // 保留原始自适应实体分析数据
+            adaptiveEntityAnalysis: {
+              originalQuery: adaptiveAnalysis.originalQuery,
+              intent: adaptiveAnalysis.intent,
+              complexity: adaptiveAnalysis.complexity,
+              confidence: adaptiveAnalysis.confidence,
+              entities: adaptiveAnalysis.entities,
+              keywords: adaptiveAnalysis.keywords,
+              logicalRelations: adaptiveAnalysis.logicalRelations
+            }
+          };
+          setRadarChartData({
+            techScore: adaptiveAnalysis.intent === 'factual' ? 0.7 : 0.4,
+            businessScore: 0.3,
+            dailyScore: adaptiveAnalysis.complexity === 'simple' ? 0.6 : 0.3,
+            emotionScore: 0.1,
+            vectorMagnitude: 1.2
+          });
+        }
         // 处理 Agentic RAG 模式的查询分析数据
-        if (data.agenticMode && data.queryAnalysis) {
+        else if (data.agenticMode && data.queryAnalysis) {
           // 将 Agentic RAG 的查询分析转换为标准格式
           const agenticAnalysis = data.queryAnalysis;
-          // 重要：始终使用用户原始输入，防止 LLM 返回错误的 originalQuery
-          const userOriginalInput = input.trim();
           queryAnalysisData = {
             tokenization: {
               tokenCount: agenticAnalysis.keywords?.length || Math.floor(userOriginalInput.length / 2),
@@ -892,14 +1065,16 @@ export default function HomePage() {
                 </button>
               </div>
 
-              {/* Agentic RAG 开关 - 仅在 Milvus 模式下显示 */}
+              {/* RAG 模式开关 - 仅在 Milvus 模式下显示 */}
               {storageBackend === 'milvus' && (
                 <div className="flex items-center gap-2">
+                  {/* Agentic RAG 开关 */}
                   <button
                     onClick={() => {
                       setUseAgenticRAG(!useAgenticRAG);
                       if (!useAgenticRAG) {
                         setShowAgenticPanel(true);
+                        setUseAdaptiveEntityRAG(false); // 互斥
                       }
                     }}
                     className={`px-3 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
@@ -912,6 +1087,27 @@ export default function HomePage() {
                     <i className="fas fa-robot"></i>
                     Agent
                     {useAgenticRAG && <i className="fas fa-check text-xs"></i>}
+                  </button>
+
+                  {/* 自适应实体路由 RAG 开关 */}
+                  <button
+                    onClick={() => {
+                      setUseAdaptiveEntityRAG(!useAdaptiveEntityRAG);
+                      if (!useAdaptiveEntityRAG) {
+                        setShowAdaptiveEntityPanel(true);
+                        setUseAgenticRAG(false); // 互斥
+                      }
+                    }}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-all flex items-center gap-1.5 ${
+                      useAdaptiveEntityRAG
+                        ? 'bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-sm'
+                        : 'bg-gray-100 text-gray-500 hover:text-gray-700'
+                    }`}
+                    title="启用自适应实体路由 RAG"
+                  >
+                    <i className="fas fa-route"></i>
+                    Entity
+                    {useAdaptiveEntityRAG && <i className="fas fa-check text-xs"></i>}
                   </button>
                 </div>
               )}
@@ -975,7 +1171,7 @@ export default function HomePage() {
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* Milvus 查询可视化 - 当选择 Milvus 后端时显示 */}
-        {storageBackend === 'milvus' && !useAgenticRAG && (
+        {storageBackend === 'milvus' && !useAgenticRAG && !useAdaptiveEntityRAG && (
           <MilvusQueryVisualizer
             embeddingModel={embeddingModel}
             defaultExpanded={false}
@@ -1007,6 +1203,23 @@ export default function HomePage() {
                 className="shadow-lg"
               />
             )}
+          </div>
+        )}
+
+        {/* 自适应实体路由 RAG 工作流面板 - 当启用自适应实体 RAG 时显示 */}
+        {storageBackend === 'milvus' && useAdaptiveEntityRAG && showAdaptiveEntityPanel && (
+          <div className="mb-6">
+            <AdaptiveEntityWorkflowPanel
+              workflow={adaptiveEntityWorkflow}
+              queryAnalysis={adaptiveEntityQueryAnalysis}
+              entityValidation={adaptiveEntityValidation}
+              routingDecision={adaptiveEntityRoutingDecision}
+              retrievalDetails={adaptiveEntityRetrievalDetails}
+              isLoading={isLoading}
+              className="shadow-lg"
+              defaultExpanded={false}
+              onClose={() => setShowAdaptiveEntityPanel(false)}
+            />
           </div>
         )}
 

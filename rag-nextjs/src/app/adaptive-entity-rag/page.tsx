@@ -163,6 +163,7 @@ export default function AdaptiveEntityRAGPage() {
   const [maxRetries, setMaxRetries] = useState(3);
   const [enableReranking, setEnableReranking] = useState(true);
   const [topK, setTopK] = useState(5);
+  const [similarityThreshold, setSimilarityThreshold] = useState(0.3);
   
   // 模型列表状态
   const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
@@ -497,6 +498,7 @@ export default function AdaptiveEntityRAGPage() {
           embeddingModel,
           maxRetries,
           enableReranking,
+          similarityThreshold,
         }),
       });
 
@@ -541,6 +543,51 @@ export default function AdaptiveEntityRAGPage() {
     }
   };
 
+  // 删除实体
+  const handleRemoveEntity = async (standardName: string) => {
+    if (!confirm(`确定要删除实体 "${standardName}" 吗？`)) return;
+
+    try {
+      const res = await fetch('/api/adaptive-entity-rag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'remove-entity',
+          standardName,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        loadEntities();
+      }
+    } catch (err) {
+      console.error('删除实体失败:', err);
+    }
+  };
+
+  // 重置实体库
+  const handleResetEntities = async () => {
+    if (!confirm('确定要重置实体库为默认映射吗？所有自定义实体将被删除。')) return;
+
+    try {
+      const res = await fetch('/api/adaptive-entity-rag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'reset-entities',
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        loadEntities();
+      }
+    } catch (err) {
+      console.error('重置实体库失败:', err);
+    }
+  };
+
   // 渲染实体标签
   const renderEntityTag = (entity: ExtractedEntity, showDetails = false) => {
     const colors = ENTITY_TYPE_COLORS[entity.type] || ENTITY_TYPE_COLORS.OTHER;
@@ -561,42 +608,181 @@ export default function AdaptiveEntityRAGPage() {
     );
   };
 
-  // 渲染工作流步骤
+  // 渲染工作流步骤（增强版，显示详细操作）
+  const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
+  
+  const toggleStepExpand = (index: number) => {
+    setExpandedSteps(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+  
   const renderWorkflowSteps = (steps: WorkflowStep[]) => (
     <div className="space-y-2">
       {steps.map((step, index) => {
         const style = STEP_STATUS_STYLES[step.status];
+        const isExpanded = expandedSteps.has(index);
+        const hasOperations = step.details?.operations && Array.isArray(step.details.operations);
+        
         return (
           <div
             key={`step-${index}-${step.step}`}
-            className={`flex items-start gap-3 p-3 rounded-lg transition-all ${
+            className={`rounded-lg transition-all overflow-hidden ${
               step.status === 'running' ? 'bg-blue-50 border border-blue-200' :
               step.status === 'completed' ? 'bg-green-50 border border-green-200' :
               step.status === 'failed' ? 'bg-red-50 border border-red-200' :
+              step.status === 'skipped' ? 'bg-gray-100 border border-gray-200' :
               'bg-gray-50 border border-gray-200'
             }`}
           >
-            <span className={`text-lg ${style.color}`}>{style.icon}</span>
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-gray-800">{step.step}</span>
-                {step.duration !== undefined && (
-                  <span className="text-xs text-gray-500">{step.duration}ms</span>
+            {/* 步骤头部 */}
+            <div 
+              className={`flex items-start gap-3 p-3 ${hasOperations ? 'cursor-pointer hover:bg-black/5' : ''}`}
+              onClick={() => hasOperations && toggleStepExpand(index)}
+            >
+              <span className={`text-lg ${style.color}`}>{style.icon}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-800">{step.step}</span>
+                    {hasOperations && (
+                      <span className="text-gray-400 text-sm">
+                        {isExpanded ? '▼' : '▶'}
+                      </span>
+                    )}
+                  </div>
+                  {step.duration !== undefined && (
+                    <span className="text-xs text-gray-500 bg-white/50 px-2 py-0.5 rounded">{step.duration}ms</span>
+                  )}
+                </div>
+                
+                {/* 简要统计信息 */}
+                {step.details && typeof step.details === 'object' && !isExpanded && (
+                  <div className="mt-1 text-xs text-gray-600 flex flex-wrap gap-2">
+                    {step.details.entityCount !== undefined && (
+                      <span className="bg-white/50 px-2 py-0.5 rounded">实体: {step.details.entityCount}</span>
+                    )}
+                    {step.details.intent && (
+                      <span className="bg-white/50 px-2 py-0.5 rounded">意图: {step.details.intent}</span>
+                    )}
+                    {step.details.validatedCount !== undefined && (
+                      <span className="bg-white/50 px-2 py-0.5 rounded">校验: {step.details.validatedCount}/{step.details.totalCount}</span>
+                    )}
+                    {step.details.action && (
+                      <span className="bg-white/50 px-2 py-0.5 rounded">动作: {step.details.actionName || step.details.action}</span>
+                    )}
+                    {step.details.resultCount !== undefined && (
+                      <span className="bg-white/50 px-2 py-0.5 rounded">结果: {step.details.resultCount}</span>
+                    )}
+                    {step.details.inputCount !== undefined && step.details.outputCount !== undefined && (
+                      <span className="bg-white/50 px-2 py-0.5 rounded">{step.details.inputCount} → {step.details.outputCount}</span>
+                    )}
+                    {step.details.responseLength !== undefined && (
+                      <span className="bg-white/50 px-2 py-0.5 rounded">响应: {step.details.responseLength}字</span>
+                    )}
+                  </div>
+                )}
+                
+                {step.error && (
+                  <div className="mt-1 text-xs text-red-600 bg-red-50 px-2 py-1 rounded">{step.error}</div>
                 )}
               </div>
-              {step.details && typeof step.details === 'object' && (
-                <div className="mt-1 text-xs text-gray-600">
-                  {Object.entries(step.details).map(([detailKey, value], detailIndex) => (
-                    <span key={`detail-${index}-${detailIndex}-${String(detailKey)}`} className="mr-3">
-                      {String(detailKey)}: <span className="font-medium">{String(value)}</span>
-                    </span>
+            </div>
+            
+            {/* 展开的详细操作 */}
+            {isExpanded && hasOperations && (
+              <div className="border-t border-gray-200 bg-white/50 p-3">
+                <div className="text-xs font-medium text-gray-500 mb-2">执行详情</div>
+                <div className="space-y-1 font-mono text-xs">
+                  {(step.details.operations as string[]).map((op, opIndex) => (
+                    <div 
+                      key={`op-${index}-${opIndex}`}
+                      className={`py-1 px-2 rounded ${
+                        op.startsWith('---') ? 'bg-gray-100 text-gray-600 font-medium' :
+                        op.startsWith('✓') ? 'text-green-700 bg-green-50' :
+                        op.startsWith('✗') ? 'text-red-700 bg-red-50' :
+                        op.startsWith('⚠️') ? 'text-amber-700 bg-amber-50' :
+                        op.startsWith('[') ? 'text-blue-700 bg-blue-50' :
+                        'text-gray-700'
+                      }`}
+                    >
+                      {op}
+                    </div>
                   ))}
                 </div>
-              )}
-              {step.error && (
-                <div className="mt-1 text-xs text-red-600">{step.error}</div>
-              )}
-            </div>
+                
+                {/* 显示额外的结构化数据 */}
+                {step.details.extractedEntities && step.details.extractedEntities.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="text-xs font-medium text-gray-500 mb-2">提取的实体</div>
+                    <div className="flex flex-wrap gap-2">
+                      {(step.details.extractedEntities as Array<{name: string; type: string; confidence: number}>).map((e, eIndex) => (
+                        <span 
+                          key={`entity-${index}-${eIndex}`}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs bg-purple-100 text-purple-700"
+                        >
+                          {e.name}
+                          <span className="text-purple-500">({e.type})</span>
+                          <span className="bg-purple-200 px-1 rounded">{(e.confidence * 100).toFixed(0)}%</span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {step.details.validatedEntities && step.details.validatedEntities.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="text-xs font-medium text-gray-500 mb-2">校验结果</div>
+                    <div className="space-y-1">
+                      {(step.details.validatedEntities as Array<{original: string; normalized: string; type: string; isValid: boolean; matchScore: number}>).map((e, eIndex) => (
+                        <div 
+                          key={`validated-${index}-${eIndex}`}
+                          className={`flex items-center gap-2 text-xs px-2 py-1 rounded ${e.isValid ? 'bg-green-50' : 'bg-red-50'}`}
+                        >
+                          <span className={e.isValid ? 'text-green-600' : 'text-red-600'}>
+                            {e.isValid ? '✓' : '✗'}
+                          </span>
+                          <span className="font-medium">{e.original}</span>
+                          {e.normalized && e.normalized !== e.original && (
+                            <>
+                              <span className="text-gray-400">→</span>
+                              <span className="text-blue-600">{e.normalized}</span>
+                            </>
+                          )}
+                          <span className="text-gray-400">({e.type})</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                
+                {step.details.topResults && step.details.topResults.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <div className="text-xs font-medium text-gray-500 mb-2">检索结果预览</div>
+                    <div className="space-y-2">
+                      {(step.details.topResults as Array<{id: string; score: number; contentPreview: string; matchType: string}>).map((r, rIndex) => (
+                        <div 
+                          key={`result-${index}-${rIndex}`}
+                          className="text-xs bg-white p-2 rounded border border-gray-200"
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="font-medium text-gray-700">#{rIndex + 1}</span>
+                            <span className="text-blue-600">{(r.score * 100).toFixed(1)}%</span>
+                          </div>
+                          <div className="text-gray-600 line-clamp-2">{r.contentPreview}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         );
       })}
@@ -852,7 +1038,7 @@ export default function AdaptiveEntityRAGPage() {
                   </div>
 
                   {/* 其他参数 */}
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs text-slate-400 mb-1">最大重试</label>
                       <input
@@ -874,6 +1060,25 @@ export default function AdaptiveEntityRAGPage() {
                         onChange={(e) => setTopK(parseInt(e.target.value) || 5)}
                         className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-sm text-white"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">
+                        相似度阈值 <span className="text-cyan-400">{similarityThreshold.toFixed(2)}</span>
+                      </label>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={similarityThreshold}
+                        onChange={(e) => setSimilarityThreshold(parseFloat(e.target.value))}
+                        className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                      />
+                      <div className="flex justify-between text-[10px] text-slate-500 mt-1">
+                        <span>0.0</span>
+                        <span>0.5</span>
+                        <span>1.0</span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1290,22 +1495,19 @@ export default function AdaptiveEntityRAGPage() {
                       {ENTITY_TYPE_LABELS[type as EntityType] || type} ({typeEntities.length})
                     </div>
                     <div className="flex flex-wrap gap-1">
-                      {typeEntities.slice(0, 5).map((entity, i) => (
+                      {typeEntities.map((entity, i) => (
                         <span
                           key={`lib-entity-${type}-${i}-${entity.standardName}`}
-                          title={`别名: ${entity.aliases?.join(', ') || '无'}`}
-                          className={`px-2 py-0.5 text-xs rounded-full cursor-default ${
+                          title={`别名: ${entity.aliases?.join(', ') || '无'}\n点击删除`}
+                          onClick={() => handleRemoveEntity(entity.standardName)}
+                          className={`px-2 py-0.5 text-xs rounded-full cursor-pointer hover:opacity-75 transition-opacity group relative ${
                             ENTITY_TYPE_COLORS[type as EntityType]?.bg || 'bg-gray-100'
                           } ${ENTITY_TYPE_COLORS[type as EntityType]?.text || 'text-gray-700'}`}
                         >
                           {entity.standardName}
+                          <span className="hidden group-hover:inline ml-1 text-red-500">×</span>
                         </span>
                       ))}
-                      {typeEntities.length > 5 && (
-                        <span className="px-2 py-0.5 text-xs text-slate-500">
-                          +{typeEntities.length - 5}
-                        </span>
-                      )}
                     </div>
                   </div>
                 ))}
@@ -1313,6 +1515,19 @@ export default function AdaptiveEntityRAGPage() {
                   <p className="text-sm text-slate-500 text-center py-4">暂无实体数据</p>
                 )}
               </div>
+
+              {/* 重置按钮 */}
+              {entities.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-slate-700">
+                  <button
+                    onClick={handleResetEntities}
+                    className="w-full py-1.5 bg-red-600/20 hover:bg-red-600/40 text-red-400 text-xs rounded transition-colors"
+                  >
+                    <i className="fas fa-undo mr-1"></i>
+                    重置为默认实体库
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* 功能说明卡片 */}
