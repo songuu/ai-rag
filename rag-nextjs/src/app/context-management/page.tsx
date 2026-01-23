@@ -93,6 +93,11 @@ export default function ContextManagementPage() {
   const [showDocs, setShowDocs] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<number>>(new Set());
   
+  // 流式输出状态
+  const [useStreaming, setUseStreaming] = useState(true);
+  const [streamingContent, setStreamingContent] = useState('');
+  const [isStreaming, setIsStreaming] = useState(false);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // ==================== 数据加载 ====================
@@ -234,10 +239,174 @@ export default function ContextManagementPage() {
     e.preventDefault();
     if (!question.trim() || !currentSessionId || isLoading) return;
     
+    const userQuestion = question.trim();
+    setQuestion('');
     setIsLoading(true);
     setRewrittenQuery(null);
     setWorkflowSteps([]);
+    setStreamingContent('');
     
+    // 立即添加用户消息到界面
+    const userMsg: ConversationMessage = {
+      id: `temp-user-${Date.now()}`,
+      role: 'user',
+      content: userQuestion,
+      timestamp: Date.now(),
+    };
+    
+    setCurrentState(prev => prev ? {
+      ...prev,
+      messages: [...prev.messages, userMsg],
+    } : null);
+    
+    // 如果使用流式输出
+    if (useStreaming) {
+      setIsStreaming(true);
+      
+      // 添加空的助手消息占位
+      const assistantMsgId = `temp-assistant-${Date.now()}`;
+      const assistantMsg: ConversationMessage = {
+        id: assistantMsgId,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now() + 1,
+      };
+      
+      setCurrentState(prev => prev ? {
+        ...prev,
+        messages: [...prev.messages, assistantMsg],
+      } : null);
+      
+      try {
+        const res = await fetch('/api/context-management', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'stream-query',
+            sessionId: currentSessionId,
+            question: userQuestion,
+            llmModel,
+            embeddingModel,
+            windowStrategy,
+            maxRounds,
+            maxTokens,
+            enableQueryRewriting,
+            topK,
+            similarityThreshold,
+          }),
+        });
+        
+        if (!res.ok) {
+          throw new Error(`HTTP error! status: ${res.status}`);
+        }
+        
+        const reader = res.body?.getReader();
+        const decoder = new TextDecoder();
+        
+        if (!reader) {
+          throw new Error('无法获取响应流');
+        }
+        
+        let buffer = '';
+        let fullContent = '';
+        
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          buffer += decoder.decode(value, { stream: true });
+          
+          // 按双换行分割 SSE 消息
+          const messages = buffer.split('\n\n');
+          buffer = messages.pop() || '';
+          
+          for (const message of messages) {
+            if (!message.trim()) continue;
+            
+            const lines = message.split('\n');
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const jsonStr = line.slice(6).trim();
+                
+                if (jsonStr === '[DONE]') {
+                  console.log('[Stream] 完成');
+                  continue;
+                }
+                
+                if (!jsonStr) continue;
+                
+                try {
+                  const event = JSON.parse(jsonStr);
+                  
+                  switch (event.type) {
+                    case 'workflow':
+                      // 更新工作流状态
+                      if (event.data?.allSteps) {
+                        setWorkflowSteps(event.data.allSteps);
+                      }
+                      break;
+                      
+                    case 'token':
+                      // 流式更新内容
+                      fullContent = event.data.fullResponse || (fullContent + event.data.content);
+                      setStreamingContent(fullContent);
+                      
+                      // 更新消息内容
+                      setCurrentState(prev => prev ? {
+                        ...prev,
+                        messages: prev.messages.map(msg =>
+                          msg.id === assistantMsgId
+                            ? { ...msg, content: fullContent }
+                            : msg
+                        ),
+                      } : null);
+                      break;
+                      
+                    case 'done':
+                      // 完成，更新最终状态
+                      if (event.data) {
+                        setRewrittenQuery(event.data.rewrittenQuery || null);
+                        setRetrievedDocs(event.data.retrievedDocs || []);
+                        setWorkflowSteps(event.data.workflowSteps || []);
+                      }
+                      break;
+                      
+                    case 'error':
+                      console.error('[Stream] 错误:', event.data.error);
+                      break;
+                  }
+                } catch (parseError) {
+                  console.warn('[Stream] JSON 解析错误:', jsonStr.substring(0, 100));
+                }
+              }
+            }
+          }
+        }
+        
+        reader.releaseLock();
+        
+        // 重新加载会话以获取最新状态
+        await loadSession(currentSessionId);
+        await loadSessions();
+        
+      } catch (error) {
+        console.error('流式查询失败:', error);
+        // 移除临时消息
+        setCurrentState(prev => prev ? {
+          ...prev,
+          messages: prev.messages.filter(m => m.id !== assistantMsgId && m.id !== userMsg.id),
+        } : null);
+        alert('发送消息失败，请检查后端服务');
+      } finally {
+        setIsLoading(false);
+        setIsStreaming(false);
+        setStreamingContent('');
+      }
+      
+      return;
+    }
+    
+    // 非流式模式
     try {
       const res = await fetch('/api/context-management', {
         method: 'POST',
@@ -245,7 +414,7 @@ export default function ContextManagementPage() {
         body: JSON.stringify({
           action: 'query',
           sessionId: currentSessionId,
-          question: question.trim(),
+          question: userQuestion,
           llmModel,
           embeddingModel,
           windowStrategy,
@@ -274,8 +443,6 @@ export default function ContextManagementPage() {
         setRewrittenQuery(data.rewrittenQuery || null);
         setRetrievedDocs(data.retrievedDocs || []);
         setWorkflowSteps(data.workflow?.steps || []);
-        
-        setQuestion('');
       } else {
         console.error('查询失败:', data.error);
         alert(data.error || '查询失败');
@@ -583,13 +750,27 @@ export default function ContextManagementPage() {
                     </>
                   )}
                 </div>
-                <button
-                  onClick={handleCompress}
-                  className="px-3 py-1 bg-amber-600/80 hover:bg-amber-600 rounded-lg text-xs transition-colors"
-                  title="压缩历史记录为摘要"
-                >
-                  🗜️ 压缩
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* 流式输出指示器 */}
+                  <button
+                    onClick={() => setUseStreaming(!useStreaming)}
+                    className={`px-3 py-1 rounded-lg text-xs transition-colors flex items-center gap-1.5 ${
+                      useStreaming
+                        ? 'bg-emerald-600/80 hover:bg-emerald-600 text-white'
+                        : 'bg-slate-600/80 hover:bg-slate-600 text-slate-300'
+                    }`}
+                    title={useStreaming ? '流式输出已启用' : '点击启用流式输出'}
+                  >
+                    {useStreaming ? '⚡ 流式' : '📝 普通'}
+                  </button>
+                  <button
+                    onClick={handleCompress}
+                    className="px-3 py-1 bg-amber-600/80 hover:bg-amber-600 rounded-lg text-xs transition-colors"
+                    title="压缩历史记录为摘要"
+                  >
+                    🗜️ 压缩
+                  </button>
+                </div>
               </div>
               
               {/* 查询改写提示 */}
@@ -809,6 +990,26 @@ export default function ContextManagementPage() {
                     <div
                       className={`w-5 h-5 bg-white rounded-full transition-transform ${
                         enableQueryRewriting ? 'translate-x-6' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                </div>
+                
+                {/* 流式输出开关 */}
+                <div className="flex items-center justify-between">
+                  <label className="text-sm text-slate-300">
+                    流式输出
+                    <span className="text-xs text-slate-500 ml-1">(打字机效果)</span>
+                  </label>
+                  <button
+                    onClick={() => setUseStreaming(!useStreaming)}
+                    className={`w-12 h-6 rounded-full transition-colors ${
+                      useStreaming ? 'bg-emerald-600' : 'bg-slate-600'
+                    }`}
+                  >
+                    <div
+                      className={`w-5 h-5 bg-white rounded-full transition-transform ${
+                        useStreaming ? 'translate-x-6' : 'translate-x-0.5'
                       }`}
                     />
                   </button>

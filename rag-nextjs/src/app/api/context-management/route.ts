@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createContextManager, ContextManager, ContextManagerConfig } from '@/lib/context-management';
+import { createContextManager, ContextManager, ContextManagerConfig, StreamEvent } from '@/lib/context-management';
 
 // 全局实例
 let contextManager: ContextManager | null = null;
@@ -152,6 +152,89 @@ export async function POST(request: Request) {
             messageCount: result.state.metadata.messageCount,
             totalTokens: result.state.metadata.totalTokens,
             truncatedCount: result.state.metadata.truncatedCount,
+          },
+        });
+      }
+      
+      // SSE 流式查询
+      case 'stream-query': {
+        const {
+          sessionId,
+          question,
+          userId,
+          topK = 5,
+          similarityThreshold = 0.3,
+          llmModel,
+          embeddingModel,
+          windowStrategy,
+          maxRounds,
+          maxTokens,
+          enableQueryRewriting = true,
+        } = params;
+        
+        if (!sessionId || !question) {
+          return NextResponse.json(
+            { success: false, error: '缺少 sessionId 或 question' },
+            { status: 400 }
+          );
+        }
+        
+        // 更新配置
+        if (llmModel || embeddingModel || windowStrategy) {
+          const newConfig: Partial<ContextManagerConfig> = {};
+          if (llmModel) newConfig.llmModel = llmModel;
+          if (embeddingModel) newConfig.embeddingModel = embeddingModel;
+          if (windowStrategy || maxRounds || maxTokens) {
+            newConfig.windowConfig = {
+              ...manager.getConfig().windowConfig,
+              ...(windowStrategy && { strategy: windowStrategy }),
+              ...(maxRounds && { maxRounds }),
+              ...(maxTokens && { maxTokens }),
+            };
+          }
+          newConfig.enableQueryRewriting = enableQueryRewriting;
+          manager.updateConfig(newConfig);
+        }
+        
+        console.log(`[ContextManagement] Stream Query: sessionId=${sessionId}, question="${question}"`);
+        
+        // 创建 SSE 流
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            try {
+              const streamGenerator = manager.streamQuery(sessionId, question, {
+                userId,
+                topK,
+                similarityThreshold,
+              });
+              
+              for await (const event of streamGenerator) {
+                const sseData = `data: ${JSON.stringify(event)}\n\n`;
+                controller.enqueue(encoder.encode(sseData));
+              }
+              
+              // 发送结束信号
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            } catch (error) {
+              console.error('[Stream Query] Error:', error);
+              const errorEvent: StreamEvent = {
+                type: 'error',
+                data: { error: error instanceof Error ? error.message : String(error) },
+              };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorEvent)}\n\n`));
+            } finally {
+              controller.close();
+            }
+          },
+        });
+        
+        return new Response(stream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
           },
         });
       }

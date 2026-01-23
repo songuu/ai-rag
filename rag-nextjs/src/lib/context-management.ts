@@ -97,6 +97,22 @@ export interface ContextState {
   workflowSteps: WorkflowStep[];
 }
 
+// SSE 流式输出事件类型
+export type StreamEventType = 'workflow' | 'token' | 'done' | 'error';
+
+export interface StreamEvent {
+  type: StreamEventType;
+  data: any;
+}
+
+export interface StreamQueryResult {
+  response: string;
+  state: ContextState;
+  rewrittenQuery?: string;
+  retrievedDocs: RetrievedDocument[];
+  workflowSteps: WorkflowStep[];
+}
+
 export type WindowStrategy = 'sliding_window' | 'token_limit' | 'hybrid';
 
 export interface WindowConfig {
@@ -892,6 +908,206 @@ export class ContextManager {
       retrievedDocs,
       workflowSteps,
     };
+  }
+  
+  // ==================== 流式查询处理 (SSE) ====================
+  
+  /**
+   * 流式查询处理 - 使用 AsyncGenerator 实现 SSE
+   * 返回一个 AsyncGenerator，可以逐步输出工作流状态和响应 token
+   */
+  async *streamQuery(
+    sessionId: string,
+    userQuery: string,
+    options: { userId?: string; topK?: number; similarityThreshold?: number } = {}
+  ): AsyncGenerator<StreamEvent, StreamQueryResult, unknown> {
+    const workflowSteps: WorkflowStep[] = [];
+    const topK = options.topK || this.config.topK;
+    const threshold = options.similarityThreshold || this.config.similarityThreshold;
+    
+    // 1. 加载/创建会话
+    let loadStep = createStep('状态加载');
+    let sessionData = loadSession(sessionId);
+    if (!sessionData) {
+      sessionData = {
+        metadata: {
+          sessionId, userId: options.userId, createdAt: Date.now(), lastActiveAt: Date.now(),
+          totalTokens: 0, messageCount: 0, truncatedCount: 0, summarizedRounds: 0,
+        },
+        messages: [],
+      };
+    }
+    const completedLoadStep = completeStep(loadStep, { isNew: !sessionData.messages.length });
+    workflowSteps.push(completedLoadStep);
+    yield { type: 'workflow', data: { step: completedLoadStep, allSteps: [...workflowSteps] } };
+    
+    // 2. 窗口截断
+    let trimStep = createStep('窗口截断');
+    const { messages: trimmedMessages, trimmedCount } = await trimConversationMessages(
+      sessionData.messages,
+      this.config.windowConfig
+    );
+    sessionData.messages = trimmedMessages;
+    const completedTrimStep = completeStep(trimStep, { trimmedCount, remainingCount: trimmedMessages.length });
+    workflowSteps.push(completedTrimStep);
+    yield { type: 'workflow', data: { step: completedTrimStep, allSteps: [...workflowSteps] } };
+    
+    // 3. 查询改写
+    let rewriteStep = createStep('查询改写');
+    let rewriteResult: RewriteResult = { rewrittenQuery: userQuery, needsRewrite: false, reason: '未启用' };
+    
+    if (this.config.enableQueryRewriting && sessionData.messages.length > 0) {
+      rewriteResult = await rewriteQuery(userQuery, sessionData.messages, this.rewriteChain);
+    }
+    const completedRewriteStep = completeStep(rewriteStep, {
+      original: userQuery,
+      rewritten: rewriteResult.rewrittenQuery,
+      needsRewrite: rewriteResult.needsRewrite,
+      reason: rewriteResult.reason,
+    });
+    workflowSteps.push(completedRewriteStep);
+    yield { type: 'workflow', data: { step: completedRewriteStep, allSteps: [...workflowSteps] } };
+    
+    // 4. 判断是否需要检索
+    const greeting = isGreeting(userQuery);
+    let retrievedDocs: RetrievedDocument[] = [];
+    
+    if (!greeting) {
+      // 5. 向量检索
+      let retrieveStep = createStep('向量检索');
+      retrievedDocs = await retrieveDocuments(
+        rewriteResult.rewrittenQuery,
+        this.embeddings,
+        this.config.milvusCollection,
+        this.config.embeddingModel,
+        topK,
+        threshold
+      );
+      const completedRetrieveStep = completeStep(retrieveStep, {
+        query: rewriteResult.rewrittenQuery,
+        resultCount: retrievedDocs.length,
+        topScore: retrievedDocs[0]?.score,
+      });
+      workflowSteps.push(completedRetrieveStep);
+      yield { type: 'workflow', data: { step: completedRetrieveStep, allSteps: [...workflowSteps] } };
+      
+      // 6. 相关性过滤
+      let filterStep = createStep('相关性验证');
+      const originalCount = retrievedDocs.length;
+      retrievedDocs = filterRelevantDocuments(retrievedDocs, rewriteResult.rewrittenQuery);
+      const completedFilterStep = completeStep(filterStep, {
+        originalCount,
+        filteredCount: retrievedDocs.length,
+      });
+      workflowSteps.push(completedFilterStep);
+      yield { type: 'workflow', data: { step: completedFilterStep, allSteps: [...workflowSteps] } };
+    } else {
+      const skipRetrieveStep = completeStep(createStep('向量检索'), { skipped: true, reason: '问候语' });
+      workflowSteps.push(skipRetrieveStep);
+      yield { type: 'workflow', data: { step: skipRetrieveStep, allSteps: [...workflowSteps] } };
+      
+      const skipFilterStep = completeStep(createStep('相关性验证'), { skipped: true });
+      workflowSteps.push(skipFilterStep);
+      yield { type: 'workflow', data: { step: skipFilterStep, allSteps: [...workflowSteps] } };
+    }
+    
+    // 7. 流式生成响应
+    let generateStep = createStep('响应生成');
+    yield { type: 'workflow', data: { step: generateStep, allSteps: [...workflowSteps, generateStep] } };
+    
+    const context = retrievedDocs.length > 0
+      ? retrievedDocs.map((d, i) => `[${i + 1}] ${d.content}`).join('\n\n')
+      : '无相关参考资料';
+    
+    let fullResponse = '';
+    
+    try {
+      // 构建流式提示
+      const systemPrompt = greeting
+        ? '你是一个友好的智能助手。请自然地回应用户的问候或问题。保持简洁友好。'
+        : `你是一个智能助手。请根据参考资料回答用户问题。
+
+要求：
+1. 如果参考资料中有相关信息，基于资料回答
+2. 如果参考资料中没有相关信息，尝试用你的知识回答，但要说明这不是来自资料库
+3. 保持回答简洁友好
+4. 不要编造不存在的信息
+
+参考资料：
+${context}`;
+
+      const historyText = sessionData.messages.slice(-6)
+        .map(m => `${m.role === 'user' ? '用户' : 'AI'}: ${m.content}`)
+        .join('\n');
+      
+      const fullPrompt = historyText
+        ? `${systemPrompt}\n\n历史对话:\n${historyText}\n\n用户: ${userQuery}\n\nAI:`
+        : `${systemPrompt}\n\n用户: ${userQuery}\n\nAI:`;
+      
+      // 使用 LLM 流式输出
+      const stream = await this.llm.stream(fullPrompt);
+      
+      for await (const chunk of stream) {
+        const content = typeof chunk.content === 'string' ? chunk.content : '';
+        if (content) {
+          fullResponse += content;
+          yield { type: 'token', data: { content, fullResponse } };
+        }
+      }
+    } catch (error) {
+      console.error('[streamQuery] Generation error:', error);
+      fullResponse = '抱歉，生成回答时出错，请稍后重试。';
+      yield { type: 'error', data: { error: error instanceof Error ? error.message : String(error) } };
+    }
+    
+    const completedGenerateStep = completeStep(generateStep, { 
+      responseLength: fullResponse.length,
+      usedDocs: retrievedDocs.length,
+    });
+    workflowSteps[workflowSteps.length] = completedGenerateStep;
+    yield { type: 'workflow', data: { step: completedGenerateStep, allSteps: [...workflowSteps] } };
+    
+    // 8. 保存消息
+    let saveStep = createStep('状态保存');
+    const now = Date.now();
+    const userMsg: ConversationMessage = {
+      id: `${now}-user`, role: 'user', content: userQuery,
+      timestamp: now, tokenCount: estimateTokens(userQuery),
+    };
+    const aiMsg: ConversationMessage = {
+      id: `${now}-ai`, role: 'assistant', content: fullResponse,
+      timestamp: now + 1, tokenCount: estimateTokens(fullResponse),
+    };
+    
+    sessionData.messages.push(userMsg, aiMsg);
+    sessionData.metadata.lastActiveAt = now;
+    sessionData.metadata.messageCount = sessionData.messages.length;
+    sessionData.metadata.totalTokens = sessionData.messages.reduce((sum, m) => sum + (m.tokenCount || 0), 0);
+    sessionData.metadata.truncatedCount += trimmedCount;
+    
+    saveSession(sessionData);
+    const completedSaveStep = completeStep(saveStep, { messageCount: sessionData.messages.length });
+    workflowSteps.push(completedSaveStep);
+    yield { type: 'workflow', data: { step: completedSaveStep, allSteps: workflowSteps } };
+    
+    // 发送完成事件
+    const result: StreamQueryResult = {
+      response: fullResponse,
+      state: {
+        messages: sessionData.messages,
+        metadata: sessionData.metadata,
+        summary: sessionData.summary,
+        artifacts: { rewrittenQuery: rewriteResult.rewrittenQuery, retrievedDocuments: retrievedDocs },
+        workflowSteps,
+      },
+      rewrittenQuery: rewriteResult.needsRewrite ? rewriteResult.rewrittenQuery : undefined,
+      retrievedDocs,
+      workflowSteps,
+    };
+    
+    yield { type: 'done', data: result };
+    
+    return result;
   }
   
   // ==================== 压缩功能 (使用 LangChain 链) ====================

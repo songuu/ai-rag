@@ -40,3 +40,4 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 rag-nextjs\adaptive-rag-uploads
+rag-nextjs\data
