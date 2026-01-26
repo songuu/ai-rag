@@ -4,13 +4,24 @@
  * 实现三条车道的具体处理逻辑
  * 
  * 重要：所有车道都使用用户配置的推理模型，只是处理复杂度不同
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
-import { Ollama, OllamaEmbeddings } from '@langchain/ollama';
-import { getMilvusInstance, selectModelByDimension } from './milvus-client';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { Embeddings } from '@langchain/core/embeddings';
+import { getMilvusInstance } from './milvus-client';
 import { IntentClassification } from './intent-router';
+import { createLLM, createEmbedding, selectModelByDimension, getModelFactory } from './model-config';
 
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+// 帮助函数：从 LLM 响应中提取内容
+function extractContent(response: any): string {
+  if (typeof response === 'string') return response;
+  if (response && typeof response === 'object' && 'content' in response) {
+    return typeof response.content === 'string' ? response.content : '';
+  }
+  return '';
+}
 
 // ==================== 流式事件类型 ====================
 
@@ -89,11 +100,8 @@ export async function* executeLane1(
   };
 
   try {
-    const llm = new Ollama({
-      model: model,
-      baseUrl: OLLAMA_BASE_URL,
-      temperature: config.temperature ?? 0.7,
-    });
+    // 使用统一配置系统创建 LLM
+    const llm = createLLM(model, { temperature: config.temperature ?? 0.7 });
 
     // 使用快速模型的简洁闲聊提示词
     const prompt = `你是一个友好的AI助手。简洁自然地回答：
@@ -110,10 +118,11 @@ ${query}`;
     const stream = await llm.stream(prompt);
 
     for await (const chunk of stream) {
-      answer += chunk;
+      const chunkContent = extractContent(chunk);
+      answer += chunkContent;
       yield {
         type: 'generation',
-        data: { status: 'streaming', content: chunk, fullContent: answer },
+        data: { status: 'streaming', content: chunkContent, fullContent: answer },
         timestamp: Date.now()
       };
     }
@@ -220,10 +229,8 @@ export async function* executeLane2(
 
     console.log(`[Lane 2] 向量维度: ${dimension}, 嵌入模型: ${embeddingModelName}`);
 
-    const embeddings = new OllamaEmbeddings({
-      model: embeddingModelName,
-      baseUrl: OLLAMA_BASE_URL,
-    });
+    // 使用统一配置系统创建 Embedding 模型
+    const embeddings = createEmbedding(embeddingModelName);
 
     const queryVector = await embeddings.embedQuery(query);
     const searchResults = await milvus.search(queryVector, topK, threshold);
@@ -284,9 +291,8 @@ export async function* executeLane2(
       timestamp: Date.now()
     };
 
-    const llm = new Ollama({
-      model: model,
-      baseUrl: OLLAMA_BASE_URL,
+    // 使用统一配置系统创建 LLM
+    const llm = createLLM(model, {
       temperature: config.temperature ?? 0.3,
     });
 
@@ -330,10 +336,11 @@ ${query}
     const stream = await llm.stream(prompt);
 
     for await (const chunk of stream) {
-      answer += chunk;
+      const chunkContent = extractContent(chunk);
+      answer += chunkContent;
       yield {
         type: 'generation',
-        data: { status: 'streaming', content: chunk, fullContent: answer },
+        data: { status: 'streaming', content: chunkContent, fullContent: answer },
         timestamp: Date.now()
       };
     }
@@ -448,10 +455,8 @@ export async function* executeLane3(
       timestamp: Date.now()
     };
 
-    // 使用推理模型分析查询
-    const plannerLLM = new Ollama({
-      model: reasoningModel,
-      baseUrl: OLLAMA_BASE_URL,
+    // 使用统一配置系统创建推理模型
+    const plannerLLM = createLLM(reasoningModel, {
       temperature: 0.3,
     });
 
@@ -461,7 +466,9 @@ export async function* executeLane3(
 
 请列出 2-4 个需要检索的关键问题（每行一个）:`;
 
-    const planResult = await plannerLLM.invoke(planPrompt);
+    const planResponse = await plannerLLM.invoke(planPrompt);
+    // 提取字符串内容（plannerLLM.invoke 返回 AIMessage 对象）
+    const planResult = extractContent(planResponse);
     
     thinkingSteps.push({
       id: `think_lane3_1_${startTime}`,
@@ -510,10 +517,8 @@ export async function* executeLane3(
 
     console.log(`[Lane 3] 向量维度: ${dimension}, 嵌入模型: ${embeddingModelName}`);
 
-    const embeddings = new OllamaEmbeddings({
-      model: embeddingModelName,
-      baseUrl: OLLAMA_BASE_URL,
-    });
+    // 使用统一配置系统创建 Embedding 模型
+    const embeddings = createEmbedding(embeddingModelName);
 
     // 多查询检索：原始查询 + 从分析结果提取的子查询
     const queries = [query];
@@ -603,9 +608,8 @@ export async function* executeLane3(
       timestamp: Date.now()
     };
 
-    const reasonerLLM = new Ollama({
-      model: reasoningModel,
-      baseUrl: OLLAMA_BASE_URL,
+    // 使用统一配置系统创建推理模型
+    const reasonerLLM = createLLM(reasoningModel, {
       temperature: config.temperature ?? 0.5,
     });
 
@@ -649,10 +653,11 @@ ${query}
     const stream = await reasonerLLM.stream(reasoningPrompt);
 
     for await (const chunk of stream) {
-      answer += chunk;
+      const chunkContent = extractContent(chunk);
+      answer += chunkContent;
       yield {
         type: 'generation',
-        data: { status: 'streaming', content: chunk, fullContent: answer },
+        data: { status: 'streaming', content: chunkContent, fullContent: answer },
         timestamp: Date.now()
       };
     }

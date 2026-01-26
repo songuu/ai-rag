@@ -8,11 +8,21 @@
  * 2. 策略控制层 (Strategic Control Layer) - 实体校验、自适应路由、约束松弛
  * 3. 执行检索层 (Execution Layer) - 结构化/语义检索、混合重排序
  * 4. 数据基础设施层 (Data Infrastructure Layer) - 向量数据库、实体元数据存储
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
-import { ChatOllama } from '@langchain/ollama';
-import { OllamaEmbeddings } from '@langchain/ollama';
-import { getMilvusInstance, MilvusVectorStore, MilvusSearchResult, getModelDimension } from './milvus-client';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { Embeddings } from '@langchain/core/embeddings';
+import { getMilvusInstance, MilvusVectorStore, MilvusSearchResult } from './milvus-client';
+import {
+  createLLM,
+  createEmbedding,
+  getModelDimension,
+  selectModelByDimension,
+  getModelFactory,
+  isOllamaProvider,
+} from './model-config';
 
 // ==================== 类型定义 ====================
 
@@ -541,15 +551,15 @@ export class EntityPreprocessor {
  * 负责实体提取和意图分类
  */
 export class CognitiveParser {
-  private llm: ChatOllama;
+  private llm: BaseChatModel;
   private modelName: string;
 
   constructor(model: string) {
     this.modelName = model;
-    this.llm = new ChatOllama({
-      model,
+    // 使用统一模型配置系统
+    this.llm = createLLM(model, { 
       temperature: 0.1,
-      format: 'json',
+      options: { format: 'json' }
     });
   }
 
@@ -876,17 +886,17 @@ export class CognitiveParser {
  * 维护状态，执行校验、路由和约束松弛
  */
 export class StrategyController {
-  private llm: ChatOllama;
+  private llm: BaseChatModel;
   private entityMetadataStore: EntityMetadataStore;
   private config: AdaptiveRAGConfig;
 
   constructor(config: AdaptiveRAGConfig, entityMetadataStore: EntityMetadataStore) {
     this.config = config;
     this.entityMetadataStore = entityMetadataStore;
-    this.llm = new ChatOllama({
-      model: config.llmModel,
+    // 使用统一模型配置系统
+    this.llm = createLLM(config.llmModel, {
       temperature: 0.1,
-      format: 'json',
+      options: { format: 'json' }
     });
   }
 
@@ -1140,20 +1150,16 @@ export class StrategyController {
  * 执行具体的检索操作
  */
 export class SearchExecutor {
-  private embeddings: OllamaEmbeddings;
+  private embeddings: Embeddings;
   private config: AdaptiveRAGConfig;
-  private llm: ChatOllama;
+  private llm: BaseChatModel;
   private milvus: MilvusVectorStore | null = null;
 
   constructor(config: AdaptiveRAGConfig) {
     this.config = config;
-    this.embeddings = new OllamaEmbeddings({
-      model: config.embeddingModel,
-    });
-    this.llm = new ChatOllama({
-      model: config.llmModel,
-      temperature: 0.1,
-    });
+    // 使用统一模型配置系统
+    this.embeddings = createEmbedding(config.embeddingModel);
+    this.llm = createLLM(config.llmModel, { temperature: 0.1 });
   }
 
   /**
@@ -1435,12 +1441,13 @@ export class SearchExecutor {
  */
 export class EntityMetadataStore {
   private entities: Map<string, EntityMetadata> = new Map();
-  private embeddings: OllamaEmbeddings;
+  private embeddings: Embeddings;
   private persistPath: string;
   private isInitialized: boolean = false;
 
   constructor(embeddingModel: string, persistPath?: string) {
-    this.embeddings = new OllamaEmbeddings({ model: embeddingModel });
+    // 使用统一模型配置系统
+    this.embeddings = createEmbedding(embeddingModel);
     this.persistPath = persistPath || './data/entity-metadata.json';
   }
 
@@ -1741,13 +1748,11 @@ export class EntityMetadataStore {
  * 响应生成器
  */
 export class ResponseGenerator {
-  private llm: ChatOllama;
+  private llm: BaseChatModel;
 
   constructor(model: string) {
-    this.llm = new ChatOllama({
-      model,
-      temperature: 0.7,
-    });
+    // 使用统一模型配置系统
+    this.llm = createLLM(model, { temperature: 0.7 });
   }
 
   async generate(

@@ -6,9 +6,14 @@
  * 2. LLM 实体/关系提取 (Entity & Relation Extraction with Gleaning)
  * 3. 实体合并 (Entity Resolution)
  * 4. 社区发现与摘要 (Community Detection & Summarization)
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
-import { Ollama, OllamaEmbeddings } from "@langchain/ollama";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { Embeddings } from "@langchain/core/embeddings";
+import { BaseMessage, AIMessage } from "@langchain/core/messages";
+import { createLLM, createEmbedding, getModelFactory } from "./model-config";
 
 // ==================== 类型定义 ====================
 
@@ -297,8 +302,8 @@ const COMMUNITY_SUMMARY_PROMPT = `你是一个知识图谱分析专家。请为�
 
 export class EntityExtractor {
   private config: ExtractionConfig;
-  private llm: Ollama;
-  private embeddings: OllamaEmbeddings;
+  private llm: BaseChatModel;
+  private embeddings: Embeddings;
   private progressCallback?: (progress: ExtractionProgress) => void;
   
   // 超时控制
@@ -309,16 +314,15 @@ export class EntityExtractor {
   constructor(config: Partial<ExtractionConfig> = {}) {
     this.config = { ...DEFAULT_EXTRACTION_CONFIG, ...config };
     
-    this.llm = new Ollama({
-      model: this.config.llmModel,
-      baseUrl: this.config.ollamaBaseUrl,
+    // 使用统一模型配置系统
+    this.llm = createLLM(this.config.llmModel, {
       temperature: 0.1, // 低温度以获得更稳定的抽取结果
     });
 
-    this.embeddings = new OllamaEmbeddings({
-      model: this.config.embeddingModel,
-      baseUrl: this.config.ollamaBaseUrl,
-    });
+    this.embeddings = createEmbedding(this.config.embeddingModel);
+    
+    const factory = getModelFactory();
+    console.log(`[EntityExtractor] 初始化完成, 提供商: ${factory.getProvider()}`);
   }
 
   /** 设置进度回调 */
@@ -730,9 +734,23 @@ export class EntityExtractor {
   }
 
   /**
+   * 从 LLM 响应中提取文本内容
+   */
+  private extractContent(response: string | BaseMessage): string {
+    if (typeof response === 'string') {
+      return response;
+    }
+    if (response && typeof response === 'object' && 'content' in response) {
+      return typeof response.content === 'string' ? response.content : '';
+    }
+    return '';
+  }
+
+  /**
    * 安全解析 JSON，带有多重回退策略
    */
-  private safeParseJson(text: string): { entities: unknown[]; relations: unknown[] } | null {
+  private safeParseJson(response: string | BaseMessage): { entities: unknown[]; relations: unknown[] } | null {
+    const text = this.extractContent(response);
     // 尝试提取 JSON 对象
     const jsonMatches = text.match(/\{[\s\S]*\}/g);
     if (!jsonMatches) return null;
@@ -1161,7 +1179,8 @@ export class EntityExtractor {
   /**
    * 通用的安全 JSON 解析，带有多重回退策略
    */
-  private safeParseJsonGeneric(text: string): Record<string, unknown> | null {
+  private safeParseJsonGeneric(response: string | BaseMessage): Record<string, unknown> | null {
+    const text = this.extractContent(response);
     // 尝试提取 JSON 对象
     const jsonMatches = text.match(/\{[\s\S]*\}/g);
     if (!jsonMatches) return null;

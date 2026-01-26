@@ -4,15 +4,19 @@
  * 支持两种存储后端：
  * 1. 内存存储（默认）- 适合开发和小数据集
  * 2. Milvus 存储 - 适合生产和大数据集
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
-import { Ollama, OllamaEmbeddings } from "@langchain/ollama";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { Document } from "@langchain/core/documents";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { Embeddings } from "@langchain/core/embeddings";
 import { MilvusVectorStore, getMilvusInstance, MilvusConfig, MilvusSearchResult } from "./milvus-client";
 import { ObservabilityEngine, type Trace } from "./observability";
 import { v4 as uuidv4 } from 'uuid';
+import { createLLM, createEmbedding, getModelFactory, isOllamaProvider } from "./model-config";
 
 // 存储后端类型
 export type StorageBackend = 'memory' | 'milvus';
@@ -47,33 +51,31 @@ export interface RAGAnswer {
  * Milvus 增强版 RAG 系统
  */
 export class MilvusRAGSystem {
-  private llm: Ollama;
-  private embeddings: OllamaEmbeddings;
+  private llm: BaseChatModel;
+  private embeddings: Embeddings;
   private milvus: MilvusVectorStore | null = null;
   private observabilityEngine: ObservabilityEngine;
   private config: Required<MilvusRAGConfig>;
   private isInitialized: boolean = false;
 
   constructor(config: MilvusRAGConfig = {}) {
+    const factory = getModelFactory();
+    const envConfig = factory.getEnvConfig();
+    
     this.config = {
-      ollamaBaseUrl: config.ollamaBaseUrl || "http://localhost:11434",
-      llmModel: config.llmModel || "llama3.1",
-      embeddingModel: config.embeddingModel || "nomic-embed-text",
+      ollamaBaseUrl: config.ollamaBaseUrl || envConfig.OLLAMA_BASE_URL,
+      llmModel: config.llmModel || (isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL),
+      embeddingModel: config.embeddingModel || (isOllamaProvider() ? envConfig.OLLAMA_EMBEDDING_MODEL : envConfig.OPENAI_EMBEDDING_MODEL),
       storageBackend: config.storageBackend || "milvus",
       milvusConfig: config.milvusConfig || {},
       onTraceUpdate: config.onTraceUpdate || (() => {}),
     };
 
-    this.llm = new Ollama({
-      baseUrl: this.config.ollamaBaseUrl,
-      model: this.config.llmModel,
-      temperature: 0,
-    });
+    // 使用统一模型配置系统
+    this.llm = createLLM(this.config.llmModel, { temperature: 0 });
+    this.embeddings = createEmbedding(this.config.embeddingModel);
 
-    this.embeddings = new OllamaEmbeddings({
-      baseUrl: this.config.ollamaBaseUrl,
-      model: this.config.embeddingModel,
-    });
+    console.log(`[MilvusRAGSystem] 初始化完成, 提供商: ${factory.getProvider()}, LLM: ${this.config.llmModel}, Embedding: ${this.config.embeddingModel}`);
 
     this.observabilityEngine = new ObservabilityEngine({
       onTraceUpdate: this.config.onTraceUpdate,

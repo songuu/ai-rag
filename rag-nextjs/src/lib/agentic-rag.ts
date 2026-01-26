@@ -10,13 +10,25 @@
  * 6. 透传原始问题：同时使用原始查询和优化查询检索
  * 7. 检索评估节点：快速判断检索质量
  * 8. LangSmith 追踪：详细调试和可观测性
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
 import { StateGraph, Annotation, END, START } from '@langchain/langgraph';
-import { Ollama, OllamaEmbeddings } from '@langchain/ollama';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
-import { getMilvusInstance, MilvusConfig, getModelDimension, selectModelByDimension } from './milvus-client';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { Embeddings } from '@langchain/core/embeddings';
+import { getMilvusInstance, MilvusConfig } from './milvus-client';
+import { 
+  createLLM, 
+  createEmbedding, 
+  getModelDimension, 
+  selectModelByDimension,
+  getModelFactory,
+  isOllamaProvider,
+  ModelConfig
+} from './model-config';
 
 // LangSmith 追踪配置
 const LANGSMITH_ENABLED = process.env.LANGCHAIN_TRACING_V2 === 'true';
@@ -220,32 +232,43 @@ const AgentStateAnnotation = Annotation.Root({
 // ==================== Agentic RAG 系统类 ====================
 
 export interface AgenticRAGConfig {
+  /** @deprecated 使用 MODEL_PROVIDER 环境变量代替 */
   ollamaBaseUrl?: string;
+  /** LLM 模型名称 (可选，默认从环境变量读取) */
   llmModel?: string;
+  /** Embedding 模型名称 (可选，默认从环境变量读取) */
   embeddingModel?: string;
+  /** Milvus 配置 */
   milvusConfig?: Partial<MilvusConfig>;
+  /** 启用幻觉检查 */
   enableHallucinationCheck?: boolean;
+  /** 启用自省模式 */
   enableSelfReflection?: boolean;
+  /** 步骤更新回调 */
   onStepUpdate?: (step: WorkflowStep) => void;
+  /** 自定义模型配置 */
+  modelConfig?: Partial<ModelConfig>;
 }
 
 export class AgenticRAGSystem {
-  private llm: Ollama;
-  private embeddings: OllamaEmbeddings;
+  private llm: BaseChatModel;
+  private embeddings: Embeddings;
   private milvusConfig: MilvusConfig;
   private config: AgenticRAGConfig;
   private graph: any; // StateGraph 实例
-  private ollamaBaseUrl: string;
   private requestedEmbeddingModel: string;
 
   constructor(config: AgenticRAGConfig = {}) {
+    const factory = getModelFactory();
+    const envConfig = factory.getEnvConfig();
+    
     const {
-      ollamaBaseUrl = 'http://localhost:11434',
-      llmModel = 'llama3.1',
-      embeddingModel = 'nomic-embed-text',
+      llmModel,
+      embeddingModel,
       milvusConfig = {},
       enableHallucinationCheck = true,
       enableSelfReflection = true,
+      modelConfig = {},
     } = config;
 
     this.config = {
@@ -254,23 +277,27 @@ export class AgenticRAGSystem {
       enableSelfReflection,
     };
 
-    this.ollamaBaseUrl = ollamaBaseUrl;
-    this.requestedEmbeddingModel = embeddingModel;
+    // 使用统一模型配置系统创建 LLM
+    const actualLlmModel = llmModel || (
+      isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL
+    );
+    this.llm = createLLM(actualLlmModel, { temperature: 0, ...modelConfig });
 
-    this.llm = new Ollama({
-      baseUrl: ollamaBaseUrl,
-      model: llmModel,
-      temperature: 0,
-    });
+    // 使用统一模型配置系统创建 Embedding
+    const actualEmbeddingModel = embeddingModel || (
+      isOllamaProvider() ? envConfig.OLLAMA_EMBEDDING_MODEL : envConfig.OPENAI_EMBEDDING_MODEL
+    );
+    this.requestedEmbeddingModel = actualEmbeddingModel;
+    this.embeddings = createEmbedding(actualEmbeddingModel, modelConfig);
 
-    this.embeddings = new OllamaEmbeddings({
-      baseUrl: ollamaBaseUrl,
-      model: embeddingModel,
-    });
+    console.log(`[Agentic RAG] 初始化完成:`);
+    console.log(`  - 提供商: ${factory.getProvider()}`);
+    console.log(`  - LLM: ${actualLlmModel}`);
+    console.log(`  - Embedding: ${actualEmbeddingModel}`);
 
     this.milvusConfig = {
-      address: milvusConfig.address || 'localhost:19530',
-      collectionName: milvusConfig.collectionName || 'rag_documents',
+      address: milvusConfig.address || process.env.MILVUS_ADDRESS || 'localhost:19530',
+      collectionName: milvusConfig.collectionName || process.env.MILVUS_COLLECTION || 'rag_documents',
       embeddingDimension: milvusConfig.embeddingDimension || 768,
       indexType: milvusConfig.indexType || 'IVF_FLAT',
       metricType: milvusConfig.metricType || 'COSINE',
@@ -281,8 +308,9 @@ export class AgenticRAGSystem {
 
   /**
    * 根据 Milvus 集合维度选择合适的 embedding 模型
+   * 使用统一模型配置系统
    */
-  private async getMatchingEmbeddings(collectionDimension: number): Promise<OllamaEmbeddings> {
+  private async getMatchingEmbeddings(collectionDimension: number): Promise<Embeddings> {
     const requestedDimension = getModelDimension(this.requestedEmbeddingModel);
     
     console.log(`[Agentic RAG] 请求的 embedding 模型: ${this.requestedEmbeddingModel} (${requestedDimension}D)`);
@@ -298,10 +326,7 @@ export class AgenticRAGSystem {
     const matchingModel = selectModelByDimension(collectionDimension);
     console.log(`[Agentic RAG] 维度不匹配，自动选择模型: ${matchingModel} (${collectionDimension}D)`);
     
-    return new OllamaEmbeddings({
-      baseUrl: this.ollamaBaseUrl,
-      model: matchingModel,
-    });
+    return createEmbedding(matchingModel);
   }
 
   // ==================== 节点实现 ====================

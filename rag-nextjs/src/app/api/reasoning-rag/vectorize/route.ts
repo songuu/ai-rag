@@ -1,22 +1,25 @@
 /**
  * Reasoning RAG 独立向量化 API
  * 使用专用的 Milvus 集合 reasoning_rag_documents
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { readdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
-import { OllamaEmbeddings } from '@langchain/ollama';
 import { MilvusVectorStore } from '@/lib/milvus-client';
+import { createEmbedding, getModelFactory } from '@/lib/model-config';
 
 // Reasoning RAG 专用配置
 const REASONING_UPLOAD_DIR = path.join(process.cwd(), 'reasoning-uploads');
 const REASONING_COLLECTION = 'reasoning_rag_documents';
 
-// 环境变量
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const DEFAULT_EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
+// 从统一配置系统获取默认嵌入模型
+const factory = getModelFactory();
+const envConfig = factory.getEnvConfig();
+const DEFAULT_EMBEDDING_MODEL = envConfig.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
 
 // 模型维度映射
 const MODEL_DIMENSIONS: Record<string, number> = {
@@ -153,11 +156,8 @@ export async function POST(request: NextRequest) {
     
     await milvus.initializeCollection();
 
-    // 创建 Embedding 模型
-    const embeddings = new OllamaEmbeddings({
-      model: embeddingModel,
-      baseUrl: OLLAMA_BASE_URL,
-    });
+    // 使用统一配置系统创建 Embedding 模型
+    const embeddings = createEmbedding(embeddingModel);
 
     // 处理每个文件
     const results: Array<{

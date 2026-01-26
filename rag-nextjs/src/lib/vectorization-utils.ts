@@ -1,20 +1,33 @@
 /**
  * 向量化工具模块
  * 提供文档向量化、分块、Embedding 生成等公共功能
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
-import { OllamaEmbeddings } from '@langchain/ollama';
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
+import { Embeddings } from '@langchain/core/embeddings';
 import { v4 as uuidv4 } from 'uuid';
-import { MilvusVectorStore, MilvusDocument, getModelDimension, getMilvusInstance, MilvusConfig } from './milvus-client';
+import { MilvusVectorStore, MilvusDocument, getMilvusInstance, MilvusConfig } from './milvus-client';
+import { 
+  createEmbedding, 
+  getModelDimension as getModelDimensionFromConfig,
+  getModelFactory,
+  selectModelByDimension as selectModelByDimensionFromConfig,
+  ModelConfig 
+} from './model-config';
 
 // ==================== 配置常量 ====================
 
+// 保留这些导出以保持向后兼容性
 export const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-export const DEFAULT_EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
+export const DEFAULT_EMBEDDING_MODEL = process.env.OLLAMA_EMBEDDING_MODEL || process.env.EMBEDDING_MODEL || 'nomic-embed-text';
 export const DEFAULT_CHUNK_SIZE = 500;
 export const DEFAULT_CHUNK_OVERLAP = 50;
 export const DEFAULT_BATCH_SIZE = 10;
+
+// 从新配置系统导出维度获取函数
+export { getModelDimensionFromConfig as getModelDimension };
 
 // ==================== 类型定义 ====================
 
@@ -65,39 +78,37 @@ export interface InsertResult {
 // ==================== Embedding 模型管理 ====================
 
 /**
- * 获取 Ollama Embedding 模型实例
+ * 获取 Embedding 模型实例
+ * 使用统一模型配置系统，自动根据 MODEL_PROVIDER 环境变量选择提供商
  */
-export function getEmbeddingModel(modelName?: string): OllamaEmbeddings {
+export function getEmbeddingModel(modelName?: string, options?: Partial<ModelConfig>): Embeddings {
   const actualModelName = modelName || DEFAULT_EMBEDDING_MODEL;
-  console.log(`[VectorizationUtils] Creating embedding model: ${actualModelName}`);
+  const factory = getModelFactory();
+  const provider = factory.getProvider();
   
-  return new OllamaEmbeddings({
-    baseUrl: OLLAMA_BASE_URL,
-    model: actualModelName,
-  });
+  console.log(`[VectorizationUtils] Creating embedding model: ${actualModelName} (provider: ${provider})`);
+  
+  return createEmbedding(actualModelName, options);
 }
 
 /**
  * 根据集合维度选择合适的模型
+ * 使用统一模型配置系统，自动根据当前提供商选择合适的模型
  */
 export function selectModelForCollection(
   collectionDimension: number, 
   preferredModel?: string
 ): string {
   if (preferredModel) {
-    const modelDim = getModelDimension(preferredModel);
+    const modelDim = getModelDimensionFromConfig(preferredModel);
     if (modelDim === collectionDimension) {
       return preferredModel;
     }
     console.warn(`[VectorizationUtils] 首选模型 ${preferredModel} 维度 ${modelDim} 与集合维度 ${collectionDimension} 不匹配`);
   }
   
-  // 根据维度返回推荐模型
-  if (collectionDimension === 768) return 'nomic-embed-text';
-  if (collectionDimension === 1024) return 'bge-m3';
-  if (collectionDimension === 384) return 'all-minilm';
-  
-  return 'nomic-embed-text'; // 默认
+  // 使用统一配置系统选择模型
+  return selectModelByDimensionFromConfig(collectionDimension);
 }
 
 // ==================== 文本分块 ====================

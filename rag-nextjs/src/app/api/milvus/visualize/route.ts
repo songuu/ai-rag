@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
-import { OllamaEmbeddings } from '@langchain/ollama';
+import { createEmbedding } from '@/lib/model-config';
 
 // 环境变量配置
 const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
@@ -168,10 +168,7 @@ export async function POST(request: NextRequest) {
         
         // 搜索一些样本数据
         if (totalDocs > 0) {
-          const embeddings = new OllamaEmbeddings({
-            baseUrl: OLLAMA_BASE_URL,
-            model: EMBEDDING_MODEL,
-          });
+          const embeddings = createEmbedding(EMBEDDING_MODEL);
           
           // 使用多个查询获取数据点
           const queries = ['技术', '商业', '日常', '科学', '文化'];
@@ -252,10 +249,7 @@ export async function POST(request: NextRequest) {
         // 根据集合维度选择模型
         const actualModel = collectionDimension === 768 ? 'nomic-embed-text' : 'mxbai-embed-large';
         
-        const embeddings = new OllamaEmbeddings({
-          baseUrl: OLLAMA_BASE_URL,
-          model: actualModel,
-        });
+        const embeddings = createEmbedding(actualModel);
         
         const queryEmbed = await embeddings.embedQuery(query);
         const results = await milvus.search(queryEmbed, topK, 0);
@@ -362,10 +356,7 @@ export async function POST(request: NextRequest) {
         const collectionDimension = stats?.embeddingDimension || 768;
         const actualModel = collectionDimension === 768 ? 'nomic-embed-text' : 'mxbai-embed-large';
         
-        const embeddings = new OllamaEmbeddings({
-          baseUrl: OLLAMA_BASE_URL,
-          model: actualModel,
-        });
+        const embeddings = createEmbedding(actualModel);
         
         const startTime = Date.now();
         const queryEmbed = await embeddings.embedQuery(query);

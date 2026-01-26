@@ -14,13 +14,20 @@
  * - Grader 是独立的 LLM 调用，而非规则评分
  * - 强调"修正循环"而非"自省评分"
  * - 更清晰的状态流转和决策逻辑
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
 import { StateGraph, Annotation, END, START } from '@langchain/langgraph';
-import { Ollama, OllamaEmbeddings } from '@langchain/ollama';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
-import { getMilvusInstance, MilvusConfig, selectModelByDimension } from './milvus-client';
+import { getMilvusInstance, MilvusConfig } from './milvus-client';
+import { 
+  createLLM, 
+  createEmbedding, 
+  selectModelByDimension,
+  getModelFactory 
+} from './model-config';
 
 // ==================== 类型定义 ====================
 
@@ -191,11 +198,8 @@ async function retrieveNode(state: typeof SCRAGStateAnnotation.State): Promise<P
     
     console.log(`[RETRIEVE] Embedding 模型: ${embeddingModel}, 维度: ${dimension}`);
     
-    // 生成查询向量
-    const embeddings = new OllamaEmbeddings({
-      model: embeddingModel,
-      baseUrl: 'http://localhost:11434',
-    });
+    // 生成查询向量 (使用统一配置系统)
+    const embeddings = createEmbedding(embeddingModel);
     
     const queryVector = await embeddings.embedQuery(query);
     
@@ -309,10 +313,8 @@ async function graderNode(state: typeof SCRAGStateAnnotation.State): Promise<Par
   }
   
   try {
-    // 初始化 Grader LLM (使用较小的模型以提高速度)
-    const graderLLM = new Ollama({
-      model: 'llama3.1',
-      baseUrl: 'http://localhost:11434',
+    // 初始化 Grader LLM (使用统一配置系统)
+    const graderLLM = createLLM(undefined, {
       temperature: 0, // 确保确定性输出
     });
     
@@ -508,9 +510,8 @@ async function rewriteNode(state: typeof SCRAGStateAnnotation.State): Promise<Pa
   console.log(`${'='.repeat(60)}`);
   
   try {
-    const rewriteLLM = new Ollama({
-      model: 'llama3.1',
-      baseUrl: 'http://localhost:11434',
+    // 使用统一配置系统
+    const rewriteLLM = createLLM(undefined, {
       temperature: 0.3, // 稍微有些创造性
     });
     
@@ -692,9 +693,8 @@ async function generateNode(state: typeof SCRAGStateAnnotation.State): Promise<P
   }
   
   try {
-    const generateLLM = new Ollama({
-      model: 'llama3.1',
-      baseUrl: 'http://localhost:11434',
+    // 使用统一配置系统
+    const generateLLM = createLLM(undefined, {
       temperature: 0.7,
     });
     

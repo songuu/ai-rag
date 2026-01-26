@@ -7,10 +7,13 @@
  * - Lane 1 (Fast Track): 闲聊/通用问题，0 IO，< 1秒
  * - Lane 2 (Standard RAG): 知识库问答，标准 RAG，3-5秒
  * - Lane 3 (Reasoning Agent): 复杂推理，深度分析，15-60秒
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
 import { StateGraph, Annotation, END, START } from '@langchain/langgraph';
-import { Ollama } from '@langchain/ollama';
+import { BaseMessage } from '@langchain/core/messages';
+import { createLLM, getModelFactory } from './model-config';
 
 // ==================== 类型定义 ====================
 
@@ -142,18 +145,20 @@ async function classifyIntentNode(
       return { classification: quickMatch };
     }
 
-    // 使用 LLM 进行深度分类
+    // 使用 LLM 进行深度分类 (使用统一配置系统)
     console.log(`[INTENT_ROUTER] 调用 LLM 模型: ${state.routerModel}`);
     
-    const llm = new Ollama({
-      model: state.routerModel,
-      baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
-    });
+    const llm = createLLM(state.routerModel);
 
     const prompt = CLASSIFICATION_PROMPT.replace('{query}', escapeBraces(state.query));
     
     console.log(`[INTENT_ROUTER] 发送分类请求...`);
-    const response = await llm.invoke(prompt);
+    const llmResponse = await llm.invoke(prompt);
+    
+    // 提取响应内容 (BaseChatModel 返回 AIMessage 对象)
+    const response = typeof llmResponse === 'string' 
+      ? llmResponse 
+      : (typeof llmResponse.content === 'string' ? llmResponse.content : '');
     
     console.log(`[INTENT_ROUTER] LLM 原始响应 (前500字符):`);
     console.log(response.substring(0, 500));

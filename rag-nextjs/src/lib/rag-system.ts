@@ -1,13 +1,15 @@
-import { Ollama, OllamaEmbeddings } from "@langchain/ollama";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { ChatPromptTemplate } from "@langchain/core/prompts";
 import { StringOutputParser } from "@langchain/core/output_parsers";
 import { Document } from "@langchain/core/documents";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { Embeddings } from "@langchain/core/embeddings";
 import { ObservabilityEngine, type Trace } from "./observability";
 import { AutoTokenizer } from "@xenova/transformers";
 import { readdir, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
+import { createLLM, createEmbedding, getModelFactory, isOllamaProvider } from "./model-config";
 
 // 接口定义
 export interface TokenInfo {
@@ -538,14 +540,15 @@ class SimpleMemoryVectorStore {
 
 // 主要的 RAG 系统类
 export class LocalRAGSystem {
-  private llm: Ollama;
-  private embeddings: OllamaEmbeddings;
+  private llm: BaseChatModel;
+  private embeddings: Embeddings;
   private vectorStore!: SimpleMemoryVectorStore;
   private isInitialized = false;
   private observabilityEngine: ObservabilityEngine;
 
   constructor(
     private config: {
+      /** @deprecated 使用 MODEL_PROVIDER 环境变量代替 */
       ollamaBaseUrl?: string;
       llmModel?: string;
       embeddingModel?: string;
@@ -555,22 +558,19 @@ export class LocalRAGSystem {
       onTraceUpdate?: (trace: Trace) => void;
     } = {}
   ) {
+    const factory = getModelFactory();
+    const envConfig = factory.getEnvConfig();
+    
     const {
-      ollamaBaseUrl = "http://localhost:11434",
-      llmModel = "llama3.1",
-      embeddingModel = "nomic-embed-text",
+      llmModel = isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL,
+      embeddingModel = isOllamaProvider() ? envConfig.OLLAMA_EMBEDDING_MODEL : envConfig.OPENAI_EMBEDDING_MODEL,
     } = config;
 
-    this.llm = new Ollama({
-      baseUrl: ollamaBaseUrl,
-      model: llmModel,
-      temperature: 0,
-    });
+    // 使用统一模型配置系统
+    this.llm = createLLM(llmModel, { temperature: 0 });
+    this.embeddings = createEmbedding(embeddingModel);
 
-    this.embeddings = new OllamaEmbeddings({
-      baseUrl: ollamaBaseUrl,
-      model: embeddingModel,
-    });
+    console.log(`[LocalRAGSystem] 初始化完成, 提供商: ${factory.getProvider()}, LLM: ${llmModel}, Embedding: ${embeddingModel}`);
 
     this.observabilityEngine = new ObservabilityEngine({
       onTraceUpdate: config.onTraceUpdate,

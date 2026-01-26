@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
-import { OllamaEmbeddings } from '@langchain/ollama';
 import { getRagSystem } from '@/lib/rag-instance';
+import { createEmbedding, getModelFactory } from '@/lib/model-config';
 import fs from 'fs';
 import path from 'path';
 
 // 环境变量配置
 const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
 const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+const factory = getModelFactory();
+const envConfig = factory.getEnvConfig();
+const EMBEDDING_MODEL = envConfig.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
 const defaultConfig: MilvusConfig = {
@@ -80,11 +81,8 @@ export async function POST(request: NextRequest) {
 
         await milvus.initializeCollection();
 
-        // 创建 Embedding 模型
-        const embeddings = new OllamaEmbeddings({
-          model: embeddingModel,
-          baseUrl: OLLAMA_BASE_URL,
-        });
+        // 使用统一配置系统创建 Embedding 模型
+        const embeddings = createEmbedding(embeddingModel);
 
         // 读取并处理每个文件
         const results: Array<{ filename: string; chunks: number; success: boolean; error?: string }> = [];
@@ -186,11 +184,8 @@ export async function POST(request: NextRequest) {
 
         await milvus.initializeCollection();
 
-        // 创建 Embedding 模型
-        const embeddings = new OllamaEmbeddings({
-          model: embeddingModel,
-          baseUrl: OLLAMA_BASE_URL,
-        });
+        // 使用统一配置系统创建 Embedding 模型
+        const embeddings = createEmbedding(embeddingModel);
 
         // 读取并处理每个文件
         const results: Array<{ filename: string; chunks: number; success: boolean; error?: string }> = [];

@@ -4,15 +4,25 @@
  * 设计目标：解决"多轮对话冷启动"问题
  * - 模拟人类对话逻辑（追问细节、横向对比、因果推演）
  * - 在当前文档范围内生成具有逻辑延续性的推荐问题
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
-import { ChatOllama } from '@langchain/ollama';
-import { OllamaEmbeddings } from '@langchain/ollama';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { Embeddings } from '@langchain/core/embeddings';
 
 // 导入自适应实体 RAG 的实体提取工具
 import { EntityPreprocessor } from './adaptive-entity-rag';
+
+// 导入统一模型配置系统
+import { 
+  createLLM, 
+  createEmbedding, 
+  getModelFactory,
+  isOllamaProvider 
+} from './model-config';
 
 // ==================== 类型定义 ====================
 
@@ -140,14 +150,12 @@ AI回答: {aiResponse}
 只返回JSON，不要其他内容。`;
 
 class IntentAnchorAnalyzer {
-  private llm: ChatOllama;
+  private llm: BaseChatModel;
   private chain: any;
 
   constructor(llmModel: string) {
-    this.llm = new ChatOllama({
-      model: llmModel,
-      temperature: 0.1,
-    });
+    // 使用统一模型配置系统
+    this.llm = createLLM(llmModel, { temperature: 0.1 });
     
     const prompt = ChatPromptTemplate.fromTemplate(ANCHOR_ANALYSIS_PROMPT);
     this.chain = prompt.pipe(this.llm).pipe(new StringOutputParser());
@@ -236,13 +244,11 @@ const STRATEGY_PROMPTS: Record<ExpansionStrategy, string> = {
 };
 
 class ExpansionStrategyRouter {
-  private llm: ChatOllama;
+  private llm: BaseChatModel;
 
   constructor(llmModel: string) {
-    this.llm = new ChatOllama({
-      model: llmModel,
-      temperature: 0.3,
-    });
+    // 使用统一模型配置系统
+    this.llm = createLLM(llmModel, { temperature: 0.3 });
   }
 
   async route(
@@ -361,14 +367,12 @@ const QUESTION_GENERATION_PROMPT = `你是一个智能问答助手，根据文�
 只返回JSON，不要其他内容。`;
 
 class CandidateQuestionGenerator {
-  private llm: ChatOllama;
+  private llm: BaseChatModel;
   private chain: any;
 
   constructor(llmModel: string) {
-    this.llm = new ChatOllama({
-      model: llmModel,
-      temperature: 0.5,
-    });
+    // 使用统一模型配置系统
+    this.llm = createLLM(llmModel, { temperature: 0.5 });
     
     const prompt = ChatPromptTemplate.fromTemplate(QUESTION_GENERATION_PROMPT);
     this.chain = prompt.pipe(this.llm).pipe(new StringOutputParser());
@@ -466,13 +470,12 @@ class CandidateQuestionGenerator {
 // ==================== 证据闭环校验器 (强化版) ====================
 
 class EvidenceValidator {
-  private embeddings: OllamaEmbeddings;
+  private embeddings: Embeddings;
   private minRelevanceScore: number;
 
   constructor(embeddingModel: string, minRelevanceScore: number = 0.3) {
-    this.embeddings = new OllamaEmbeddings({
-      model: embeddingModel,
-    });
+    // 使用统一模型配置系统
+    this.embeddings = createEmbedding(embeddingModel);
     this.minRelevanceScore = minRelevanceScore;
   }
 

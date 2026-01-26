@@ -10,11 +10,10 @@
  * - RunnableSequence, RunnableLambda, RunnablePassthrough, RunnableBranch - 链式调用
  * - trimMessages - 消息截断
  * - Document - 文档类型
- * - ChatOllama, OllamaEmbeddings - Ollama 模型
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
-import { ChatOllama } from '@langchain/ollama';
-import { OllamaEmbeddings } from '@langchain/ollama';
 import { 
   HumanMessage, 
   AIMessage, 
@@ -37,7 +36,17 @@ import {
   RunnableConfig,
 } from '@langchain/core/runnables';
 import { Document } from '@langchain/core/documents';
-import { getMilvusInstance, getModelDimension, selectModelByDimension } from './milvus-client';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { Embeddings } from '@langchain/core/embeddings';
+import { getMilvusInstance } from './milvus-client';
+import {
+  createLLM,
+  createEmbedding,
+  getModelDimension,
+  selectModelByDimension,
+  getModelFactory,
+  isOllamaProvider,
+} from './model-config';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -135,21 +144,38 @@ export interface ContextManagerConfig {
 
 // ==================== 默认配置 ====================
 
-const DEFAULT_CONFIG: ContextManagerConfig = {
-  llmModel: 'qwen2.5:0.5b',
-  embeddingModel: 'bge-m3:latest',
-  milvusCollection: 'rag_documents',
-  windowConfig: {
-    strategy: 'hybrid',
-    maxRounds: 10,
-    maxTokens: 4000,
-    preserveSystemPrompt: true,
-  },
-  enableQueryRewriting: true,
-  maxRetries: 3,
-  similarityThreshold: 0.3,
-  topK: 5,
-};
+/**
+ * 获取默认配置，使用统一模型配置系统
+ */
+function getDefaultConfig(): ContextManagerConfig {
+  const factory = getModelFactory();
+  const envConfig = factory.getEnvConfig();
+  const provider = factory.getProvider();
+  
+  return {
+    // 根据提供商选择默认模型
+    llmModel: provider === 'ollama' 
+      ? envConfig.OLLAMA_LLM_MODEL 
+      : envConfig.OPENAI_LLM_MODEL,
+    embeddingModel: provider === 'ollama'
+      ? envConfig.OLLAMA_EMBEDDING_MODEL
+      : envConfig.OPENAI_EMBEDDING_MODEL,
+    milvusCollection: process.env.MILVUS_COLLECTION || 'rag_documents',
+    windowConfig: {
+      strategy: 'hybrid',
+      maxRounds: 10,
+      maxTokens: 4000,
+      preserveSystemPrompt: true,
+    },
+    enableQueryRewriting: true,
+    maxRetries: 3,
+    similarityThreshold: 0.3,
+    topK: 5,
+  };
+}
+
+// 保持向后兼容的默认配置引用
+const DEFAULT_CONFIG: ContextManagerConfig = getDefaultConfig();
 
 // ==================== Token 计数器 (用于 trimMessages) ====================
 
@@ -604,7 +630,7 @@ function createSummaryChain(llm: ChatOllama): RunnableSequence<{ conversation: s
  */
 async function retrieveDocuments(
   query: string,
-  embeddings: OllamaEmbeddings,
+  embeddings: Embeddings,
   collection: string,
   embeddingModel: string,
   topK: number,
@@ -625,7 +651,8 @@ async function retrieveDocuments(
       const stats = await milvus.getCollectionStats();
       if (stats?.embeddingDimension && stats.embeddingDimension !== dimension) {
         const model = selectModelByDimension(stats.embeddingDimension);
-        actualEmbeddings = new OllamaEmbeddings({ model });
+        // 使用统一配置系统创建 Embedding 模型
+        actualEmbeddings = createEmbedding(model);
       }
     } catch { /* use default */ }
     
@@ -684,16 +711,26 @@ function filterRelevantDocuments(docs: RetrievedDocument[], query: string): Retr
 
 export class ContextManager {
   private config: ContextManagerConfig;
-  private llm: ChatOllama;
-  private embeddings: OllamaEmbeddings;
+  private llm: BaseChatModel;
+  private embeddings: Embeddings;
   private rewriteChain: RunnableSequence<{ history: string; query: string }, string>;
   private generateChain: RunnableSequence<GenerateInput, string>;
   private summaryChain: RunnableSequence<{ conversation: string }, string>;
   
   constructor(config: Partial<ContextManagerConfig> = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
-    this.llm = new ChatOllama({ model: this.config.llmModel, temperature: 0.7 });
-    this.embeddings = new OllamaEmbeddings({ model: this.config.embeddingModel });
+    // 使用动态获取的默认配置
+    const defaultConfig = getDefaultConfig();
+    this.config = { ...defaultConfig, ...config };
+    
+    const factory = getModelFactory();
+    console.log(`[ContextManager] 初始化, 提供商: ${factory.getProvider()}`);
+    
+    // 使用统一模型配置系统创建模型
+    this.llm = createLLM(this.config.llmModel, { temperature: 0.7 });
+    this.embeddings = createEmbedding(this.config.embeddingModel);
+    
+    console.log(`[ContextManager] LLM: ${this.config.llmModel}`);
+    console.log(`[ContextManager] Embedding: ${this.config.embeddingModel}`);
     
     // 初始化 LangChain 链
     this.rewriteChain = createRewriteChain(this.llm);
@@ -708,14 +745,15 @@ export class ContextManager {
   updateConfig(newConfig: Partial<ContextManagerConfig>): void {
     this.config = { ...this.config, ...newConfig };
     if (newConfig.llmModel) {
-      this.llm = new ChatOllama({ model: this.config.llmModel, temperature: 0.7 });
+      // 使用统一模型配置系统
+      this.llm = createLLM(this.config.llmModel, { temperature: 0.7 });
       // 重新创建所有链
       this.rewriteChain = createRewriteChain(this.llm);
       this.generateChain = createGenerateChain(this.llm);
       this.summaryChain = createSummaryChain(this.llm);
     }
     if (newConfig.embeddingModel) {
-      this.embeddings = new OllamaEmbeddings({ model: this.config.embeddingModel });
+      this.embeddings = createEmbedding(this.config.embeddingModel);
     }
   }
   

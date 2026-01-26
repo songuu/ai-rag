@@ -2,13 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getRagSystem } from '@/lib/rag-instance';
 import { analyzeQuery } from '@/lib/semantic-analyzer';
 import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
-import { OllamaEmbeddings } from '@langchain/ollama';
+import { Embeddings } from '@langchain/core/embeddings';
 import { AgenticRAGSystem } from '@/lib/agentic-rag';
 import { createAdaptiveEntityRAG } from '@/lib/adaptive-entity-rag';
+import { 
+  createLLM, 
+  createEmbedding,
+  getModelFactory,
+  getConfigSummary,
+} from '@/lib/model-config';
 
 const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
 const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
-const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
 // 默认 Milvus 配置
 const defaultMilvusConfig: MilvusConfig = {
@@ -19,11 +24,62 @@ const defaultMilvusConfig: MilvusConfig = {
   metricType: 'COSINE',
 };
 
-function getEmbeddingModel(modelName: string): OllamaEmbeddings {
-  return new OllamaEmbeddings({
-    model: modelName,
-    baseUrl: OLLAMA_BASE_URL,
-  });
+/**
+ * 获取 Embedding 模型 (使用统一配置系统)
+ */
+function getEmbeddingModel(modelName: string): Embeddings {
+  return createEmbedding(modelName);
+}
+
+/**
+ * 安全提取 LLM 响应内容
+ * LangChain chat models 的 invoke() 返回 AIMessage 对象
+ * content 可能是字符串或复杂类型，需要安全提取
+ */
+function extractLLMContent(response: any): string {
+  // 如果已经是字符串，直接返回
+  if (typeof response === 'string') {
+    return response;
+  }
+  
+  // 如果是 null 或 undefined，返回空字符串
+  if (response == null) {
+    return '';
+  }
+  
+  // 如果有 content 属性（AIMessage 对象）
+  if (typeof response === 'object' && 'content' in response) {
+    const content = response.content;
+    
+    // content 是字符串
+    if (typeof content === 'string') {
+      return content;
+    }
+    
+    // content 是数组（多部分消息）
+    if (Array.isArray(content)) {
+      return content
+        .map(part => {
+          if (typeof part === 'string') return part;
+          if (part && typeof part === 'object' && 'text' in part) return part.text;
+          return '';
+        })
+        .filter(Boolean)
+        .join('');
+    }
+    
+    // content 是其他对象，尝试序列化
+    if (typeof content === 'object') {
+      return JSON.stringify(content);
+    }
+  }
+  
+  // 最后尝试序列化整个响应
+  try {
+    return JSON.stringify(response);
+  } catch {
+    return String(response);
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -185,12 +241,8 @@ async function handleMilvusQuery(
       .map((r, i) => `[文档 ${i + 1}] (相似度: ${(r.score * 100).toFixed(1)}%)\n${r.content}`)
       .join('\n\n');
 
-    // 5. 调用 LLM 生成回答
-    const { Ollama } = await import('@langchain/ollama');
-    const llm = new Ollama({
-      model: llmModel,
-      baseUrl: OLLAMA_BASE_URL,
-    });
+    // 5. 调用 LLM 生成回答 (使用统一配置系统)
+    const llm = createLLM(llmModel);
 
     const prompt = `基于以下上下文信息回答用户的问题。如果上下文中没有相关信息，请说明你无法从现有知识库中找到答案。
 
@@ -202,7 +254,9 @@ ${context}
 请提供详细、准确的回答:`;
 
     const llmStart = Date.now();
-    const answer = await llm.invoke(prompt);
+    const response = await llm.invoke(prompt);
+    // 使用安全提取函数处理 AIMessage 对象
+    const answer = extractLLMContent(response);
     const llmTime = Date.now() - llmStart;
 
     // 6. 生成查询分析
@@ -277,8 +331,8 @@ async function handleAgenticQuery(
   const { topK, similarityThreshold, llmModel, embeddingModel, maxRetries } = options;
 
   try {
+    // 使用统一配置系统创建 Agentic RAG 实例
     const agenticRAG = new AgenticRAGSystem({
-      ollamaBaseUrl: OLLAMA_BASE_URL,
       llmModel,
       embeddingModel,
       milvusConfig: {

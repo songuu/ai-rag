@@ -12,6 +12,39 @@ interface Message {
   queryAnalysis?: any;
 }
 
+/**
+ * 安全提取消息内容为字符串
+ * 防止 LangChain 对象被直接渲染导致 React 错误
+ */
+function safeContentString(content: any): string {
+  // 如果已经是字符串，直接返回
+  if (typeof content === 'string') {
+    return content;
+  }
+  
+  // 如果是 null 或 undefined，返回空字符串
+  if (content == null) {
+    return '';
+  }
+  
+  // 如果是 LangChain 对象（有 content 属性）
+  if (typeof content === 'object' && 'content' in content) {
+    return safeContentString(content.content);
+  }
+  
+  // 如果是数组，连接所有元素
+  if (Array.isArray(content)) {
+    return content.map(item => safeContentString(item)).join('');
+  }
+  
+  // 其他对象类型，尝试转换为字符串
+  try {
+    return JSON.stringify(content);
+  } catch {
+    return String(content);
+  }
+}
+
 interface ChatMessageProps {
   message: Message;
   currentQuery: string;
@@ -392,7 +425,7 @@ export default function ChatMessage({ message, currentQuery, highlightMatchingTe
         }`}>
           {/* 消息内容 */}
           <div className="px-4 py-3">
-            <p className="text-sm whitespace-pre-wrap leading-relaxed">{message.content}</p>
+            <p className="text-sm whitespace-pre-wrap leading-relaxed">{safeContentString(message.content)}</p>
             
             {/* 时间和 Trace ID */}
             <div className={`flex items-center justify-between mt-2 text-xs ${

@@ -18,13 +18,25 @@
  *    - Hybrid Retrieval: Dense + BM25
  *    - Reranker: 深度重排序
  *    - Formatter: 结果格式化
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
 import { StateGraph, Annotation, END, START } from '@langchain/langgraph';
-import { Ollama, OllamaEmbeddings } from '@langchain/ollama';
 import { ChatPromptTemplate } from '@langchain/core/prompts';
 import { StringOutputParser } from '@langchain/core/output_parsers';
-import { getMilvusInstance, MilvusConfig, selectModelByDimension } from './milvus-client';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { Embeddings } from '@langchain/core/embeddings';
+import { getMilvusInstance, MilvusConfig } from './milvus-client';
+import {
+  createLLM,
+  createEmbedding,
+  createReasoningModel,
+  getModelDimension,
+  selectModelByDimension,
+  getModelFactory,
+  isOllamaProvider,
+} from './model-config';
 
 // ==================== 类型定义 ====================
 
@@ -376,10 +388,9 @@ async function orchestratorNode(
   console.log(`${'='.repeat(60)}`);
   
   try {
-    const llm = new Ollama({
-      model: state.config.reasoningModel,
-      baseUrl: 'http://localhost:11434',
-      temperature: state.config.temperature,
+    // 使用统一模型配置系统创建推理模型
+    const llm = createReasoningModel(state.config.reasoningModel, { 
+      temperature: state.config.temperature 
     });
     
     // 构建消息上下文
@@ -768,10 +779,8 @@ async function hybridRetrievalNode(
     
     console.log(`[HYBRID_RETRIEVAL] Embedding 模型: ${embeddingModelName}, 维度: ${dimension}`);
     
-    const embeddings = new OllamaEmbeddings({
-      model: embeddingModelName,
-      baseUrl: 'http://localhost:11434',
-    });
+    // 使用统一模型配置系统创建 Embedding 模型
+    const embeddings = createEmbedding(embeddingModelName);
     
     const queryVector = await embeddings.embedQuery(searchQuery);
     const denseSearchResult = await milvus.search(queryVector, state.config.topK);
@@ -930,10 +939,9 @@ async function rerankerNode(
   console.log(`[RERANKER] 重排序 ${docs.length} 个文档, 保留 Top-${state.config.rerankTopK}`);
   
   try {
-    const llm = new Ollama({
-      model: state.config.reasoningModel,
-      baseUrl: 'http://localhost:11434',
-      temperature: 0.1, // 低温度保证一致性
+    // 使用统一模型配置系统创建推理模型
+    const llm = createReasoningModel(state.config.reasoningModel, { 
+      temperature: 0.1 // 低温度保证一致性
     });
     
     // 使用 LLM 进行相关性评分
@@ -1152,10 +1160,9 @@ async function generatorNode(
   console.log(`${'='.repeat(60)}`);
   
   try {
-    const llm = new Ollama({
-      model: state.config.reasoningModel,
-      baseUrl: 'http://localhost:11434',
-      temperature: state.config.temperature,
+    // 使用统一模型配置系统创建推理模型
+    const llm = createReasoningModel(state.config.reasoningModel, { 
+      temperature: state.config.temperature 
     });
     
     // 转义 LangChain 模板中的花括号

@@ -21,6 +21,7 @@ import LangSmithTraceViewer from '@/components/LangSmithTraceViewer';
 import AdaptiveEntityWorkflowPanel from '@/components/AdaptiveEntityWorkflowPanel';
 import SuggestedQuestions from '@/components/SuggestedQuestions';
 import ConversationExpansionWorkflow from '@/components/ConversationExpansionWorkflow';
+import { ModelConfigPanel } from '@/components/ModelConfigPanel';
 
 interface Message {
   id: string;
@@ -42,6 +43,36 @@ interface Toast {
   id: string;
   message: string;
   type: 'success' | 'error' | 'warning' | 'info';
+}
+
+/**
+ * 安全提取 API 响应中的回答内容为字符串
+ * 防止 LangChain 对象被传递给 React 组件
+ */
+function safeAnswerString(answer: any): string {
+  if (typeof answer === 'string') {
+    return answer;
+  }
+  if (answer == null) {
+    return '';
+  }
+  // LangChain AIMessage 对象有 content 属性
+  if (typeof answer === 'object' && 'content' in answer) {
+    const content = answer.content;
+    if (typeof content === 'string') {
+      return content;
+    }
+    if (Array.isArray(content)) {
+      return content.map(item => 
+        typeof item === 'string' ? item : (item?.text || '')
+      ).join('');
+    }
+  }
+  try {
+    return JSON.stringify(answer);
+  } catch {
+    return String(answer);
+  }
 }
 
 export default function HomePage() {
@@ -532,6 +563,12 @@ export default function HomePage() {
         setRadarChartData(null);
         setRetrievalDetails(null);
         setShowQueryAnalysis(false);
+        // 清空对话延伸引擎相关状态
+        setSuggestedQuestions([]);
+        setSuggestionAnchor(null);
+        setSuggestionTimings(null);
+        setLastUserQuery('');
+        setLastAiResponse('');
       }
     } catch (error) {
       console.error('[IndexedDB] 加载历史对话失败:', error);
@@ -540,6 +577,12 @@ export default function HomePage() {
       // 即使失败，也清空状态
       setMessages([]);
       setCurrentConversationId(null);
+      // 清空对话延伸引擎相关状态
+      setSuggestedQuestions([]);
+      setSuggestionAnchor(null);
+      setSuggestionTimings(null);
+      setLastUserQuery('');
+      setLastAiResponse('');
     }
   };
 
@@ -556,6 +599,16 @@ export default function HomePage() {
       setQueryAnalysis(null);
       setRadarChartData(null);
       setRetrievalDetails(null);
+      
+      // 清空对话延伸引擎相关状态
+      setSuggestedQuestions([]);
+      setSuggestionAnchor(null);
+      setIsSuggestionsLoading(false);
+      setSuggestionTimings(null);
+      setSuggestionProcessingTime(0);
+      setLastUserQuery('');
+      setLastAiResponse('');
+      
       showToast('所有对话已删除', 'success');
     } catch (error) {
       console.error('删除所有对话失败:', error);
@@ -995,10 +1048,13 @@ export default function HomePage() {
           }
         }
 
+        // 安全提取回答内容，防止 LangChain 对象被传递给 React
+        const answerContent = safeAnswerString(data.answer);
+        
         const assistantMessage: Message = {
           id: (Date.now() + 1).toString(),
           type: 'assistant',
-          content: data.answer,
+          content: answerContent,
           timestamp: new Date(),
           traceId: data.traceId,
           retrievalDetails: data.retrievalDetails
@@ -1015,7 +1071,7 @@ export default function HomePage() {
         await saveMessageToDB({
           id: assistantMessage.id,
           type: 'assistant',
-          content: data.answer,
+          content: answerContent,
           timestamp: new Date(),
           traceId: data.traceId,
           retrievalDetails: data.retrievalDetails
@@ -1025,7 +1081,7 @@ export default function HomePage() {
         if (enableSuggestions && data.retrievalDetails?.searchResults?.length > 0) {
           generateSuggestedQuestions(
             input.trim(),
-            data.answer,
+            answerContent,
             data.retrievalDetails.searchResults
           );
         }
@@ -1659,6 +1715,9 @@ export default function HomePage() {
               onReinitialize={handleReinitialize}
               onModelChange={handleModelChange}
             />
+
+            {/* 模型配置面板 */}
+            <ModelConfigPanel />
           </div>
         </div>
       </div>

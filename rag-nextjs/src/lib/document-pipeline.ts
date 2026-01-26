@@ -10,13 +10,16 @@
  * - URL 网页
  * - YouTube 视频字幕
  * - 纯文本内容
+ * 
+ * 已更新为使用统一模型配置系统 (model-config.ts)
  */
 
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
-import { OllamaEmbeddings } from '@langchain/ollama';
+import { Embeddings } from '@langchain/core/embeddings';
 import { MilvusVectorStore, MilvusDocument, getMilvusInstance } from './milvus-client';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
+import { createEmbedding, getModelFactory } from './model-config';
 
 // ============== 类型定义 ==============
 
@@ -590,15 +593,15 @@ export async function generateEmbeddings(
   config: { embeddingModel?: string; ollamaBaseUrl?: string } = {},
   onProgress?: (progress: ProcessingProgress) => void
 ): Promise<ProcessedDocument[]> {
+  const factory = getModelFactory();
+  const envConfig = factory.getEnvConfig();
+  
   const { 
-    embeddingModel = 'nomic-embed-text', 
-    ollamaBaseUrl = 'http://localhost:11434' 
+    embeddingModel = envConfig.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text', 
   } = config;
   
-  const embeddings = new OllamaEmbeddings({
-    baseUrl: ollamaBaseUrl,
-    model: embeddingModel,
-  });
+  // 使用统一配置系统创建 Embedding 模型
+  const embeddings = createEmbedding(embeddingModel);
   
   const results: ProcessedDocument[] = [];
   
