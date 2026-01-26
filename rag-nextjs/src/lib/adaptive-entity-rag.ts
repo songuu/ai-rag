@@ -272,7 +272,7 @@ const RESPONSE_GENERATION_PROMPT = `你是一个专业的问答助手。请基�
  * 实体预处理器
  * 在 LLM 调用前使用规则和词典进行预识别，提高小模型的准确率
  */
-class EntityPreprocessor {
+export class EntityPreprocessor {
   // 常见中文地名别称映射（作为预处理词典）
   private static readonly LOCATION_ALIASES: Record<string, string> = {
     '魔都': '上海', '帝都': '北京', '妖都': '广州', '羊城': '广州',

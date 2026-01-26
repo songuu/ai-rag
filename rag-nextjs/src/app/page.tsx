@@ -19,6 +19,8 @@ import MilvusQueryVisualizer from '@/components/MilvusQueryVisualizer';
 import AgenticWorkflowPanel from '@/components/AgenticWorkflowPanel';
 import LangSmithTraceViewer from '@/components/LangSmithTraceViewer';
 import AdaptiveEntityWorkflowPanel from '@/components/AdaptiveEntityWorkflowPanel';
+import SuggestedQuestions from '@/components/SuggestedQuestions';
+import ConversationExpansionWorkflow from '@/components/ConversationExpansionWorkflow';
 
 interface Message {
   id: string;
@@ -97,6 +99,18 @@ export default function HomePage() {
   const [adaptiveEntityRoutingDecision, setAdaptiveEntityRoutingDecision] = useState<any>(null);
   const [adaptiveEntityRetrievalDetails, setAdaptiveEntityRetrievalDetails] = useState<any>(null);
   const [showAdaptiveEntityPanel, setShowAdaptiveEntityPanel] = useState(false);
+
+  // 对话延伸（推荐问题）相关状态
+  const [enableSuggestions, setEnableSuggestions] = useState(true);
+  const [suggestedQuestions, setSuggestedQuestions] = useState<any[]>([]);
+  const [suggestionAnchor, setSuggestionAnchor] = useState<any>(null);
+  const [isSuggestionsLoading, setIsSuggestionsLoading] = useState(false);
+  const [showSuggestionDetails, setShowSuggestionDetails] = useState(false);
+  const [suggestionTimings, setSuggestionTimings] = useState<any>(null);
+  const [suggestionProcessingTime, setSuggestionProcessingTime] = useState<number>(0);
+  const [lastUserQuery, setLastUserQuery] = useState<string>('');
+  const [lastAiResponse, setLastAiResponse] = useState<string>('');
+  const [showExpansionWorkflow, setShowExpansionWorkflow] = useState(true);
 
   const socketRef = useRef<Socket | null>(null);
 
@@ -653,6 +667,62 @@ export default function HomePage() {
     return tokens;
   };
 
+  // 生成推荐问题（异步调用，不阻塞主流程）
+  const generateSuggestedQuestions = async (
+    userQuery: string,
+    aiResponse: string,
+    contextChunks: any[]
+  ) => {
+    setIsSuggestionsLoading(true);
+    setSuggestedQuestions([]);
+    setSuggestionAnchor(null);
+    setLastUserQuery(userQuery);
+    setLastAiResponse(aiResponse);
+    setSuggestionProcessingTime(0);
+
+    try {
+      const response = await fetch('/api/conversation-expansion', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'expand',
+          userQuery,
+          aiResponse,
+          contextChunks: contextChunks.map(chunk => ({
+            id: chunk.id || chunk.document?.id,
+            content: chunk.content || chunk.document?.pageContent || chunk.document?.content,
+            metadata: chunk.metadata || chunk.document?.metadata,
+            score: chunk.score,
+          })),
+          llmModel,
+          maxSuggestions: 5,
+          enableValidation: true,
+        }),
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setSuggestedQuestions(data.suggestions || []);
+        setSuggestionAnchor(data.anchor);
+        setSuggestionTimings(data.timings);
+        setSuggestionProcessingTime(data.processingTime || 0);
+        console.log('[Suggestions] Generated:', data.suggestions?.length, 'questions');
+      } else {
+        console.error('[Suggestions] Error:', data.error);
+      }
+    } catch (error) {
+      console.error('[Suggestions] Failed:', error);
+    } finally {
+      setIsSuggestionsLoading(false);
+    }
+  };
+
+  // 处理推荐问题点击
+  const handleSuggestionClick = (question: string) => {
+    setInput(question);
+  };
+
   // 提交问题
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -950,6 +1020,15 @@ export default function HomePage() {
           traceId: data.traceId,
           retrievalDetails: data.retrievalDetails
         });
+
+        // 异步生成推荐问题（不阻塞主流程）
+        if (enableSuggestions && data.retrievalDetails?.searchResults?.length > 0) {
+          generateSuggestedQuestions(
+            input.trim(),
+            data.answer,
+            data.retrievalDetails.searchResults
+          );
+        }
       } else {
         throw new Error(data.error || '请求失败');
       }
@@ -1264,6 +1343,21 @@ export default function HomePage() {
                     </div>
                   </div>
                 )}
+
+                {/* 推荐问题（猜你想问）- 只显示通过校验的最终结果 */}
+                {enableSuggestions && !isLoading && !isSuggestionsLoading && 
+                  suggestedQuestions.filter(q => q.validated).length > 0 && (
+                  <div className="mt-4 p-4 bg-gradient-to-r from-slate-800/80 to-slate-900/80 rounded-xl border border-slate-700/50">
+                    <SuggestedQuestions
+                      suggestions={suggestedQuestions.filter(q => q.validated)}
+                      anchor={suggestionAnchor}
+                      timings={suggestionTimings}
+                      isLoading={false}
+                      onQuestionClick={handleSuggestionClick}
+                      showDetails={false}
+                    />
+                  </div>
+                )}
               </div>
 
               {/* 输入区域 */}
@@ -1307,6 +1401,30 @@ export default function HomePage() {
                         <i className="fas fa-brain mr-2"></i>
                         🧠
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => setEnableSuggestions(!enableSuggestions)}
+                        className={`px-4 py-2 rounded-lg transition-colors ${enableSuggestions
+                          ? 'bg-teal-600 text-white'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          }`}
+                        title={enableSuggestions ? '关闭推荐问题' : '开启推荐问题'}
+                      >
+                        💬
+                      </button>
+                      {enableSuggestions && (
+                        <button
+                          type="button"
+                          onClick={() => setShowExpansionWorkflow(!showExpansionWorkflow)}
+                          className={`px-4 py-2 rounded-lg transition-colors ${showExpansionWorkflow
+                            ? 'bg-cyan-600 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            }`}
+                          title={showExpansionWorkflow ? '隐藏思考过程' : '显示思考过程'}
+                        >
+                          🔬
+                        </button>
+                      )}
                       <button
                         type="submit"
                         disabled={isLoading || !input.trim()}
@@ -1384,6 +1502,37 @@ export default function HomePage() {
                           topK={topK}
                           threshold={threshold}
                           getRadarChartOption={getRadarChartOption}
+                        />
+                      </div>
+                    )}
+
+                    {/* 猜你想问 - 思考过程可视化（每次都显示完整检索过程） */}
+                    {enableSuggestions && showExpansionWorkflow && (isSuggestionsLoading || suggestionAnchor || suggestedQuestions.length > 0) && (
+                      <div className="mt-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <h4 className="text-sm font-medium text-gray-800">
+                              <span className="mr-2">💬</span>
+                              对话延伸引擎
+                            </h4>
+                            <span className="text-xs text-gray-500">思考过程可视化</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setShowExpansionWorkflow(!showExpansionWorkflow)}
+                            className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                          >
+                            {showExpansionWorkflow ? '收起' : '展开'}
+                          </button>
+                        </div>
+                        <ConversationExpansionWorkflow
+                          anchor={suggestionAnchor}
+                          suggestions={suggestedQuestions}
+                          timings={suggestionTimings}
+                          processingTime={suggestionProcessingTime}
+                          isLoading={isSuggestionsLoading}
+                          userQuery={lastUserQuery}
+                          aiResponse={lastAiResponse}
                         />
                       </div>
                     )}
