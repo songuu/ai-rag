@@ -1,20 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
 import { createEmbedding } from '@/lib/model-config';
+import { getMilvusConnectionConfig } from '@/lib/milvus-config';
 
 // 环境变量配置
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
-const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 
-const defaultConfig: MilvusConfig = {
-  address: MILVUS_ADDRESS,
-  collectionName: MILVUS_COLLECTION,
-  embeddingDimension: 768,
-  indexType: 'IVF_FLAT',
-  metricType: 'COSINE',
-};
+// 获取默认 Milvus 配置（使用统一配置系统）
+function getDefaultMilvusConfig(): MilvusConfig {
+  const connConfig = getMilvusConnectionConfig();
+  return {
+    address: connConfig.address,
+    collectionName: connConfig.defaultCollection,
+    embeddingDimension: connConfig.defaultDimension,
+    indexType: connConfig.defaultIndexType,
+    metricType: connConfig.defaultMetricType,
+    token: connConfig.token,
+    ssl: connConfig.ssl,
+  };
+}
 
 // t-SNE 简化实现（用于降维可视化）
 function simpleTSNE(vectors: number[][], targetDim: number = 2, iterations: number = 100): number[][] {
@@ -145,7 +150,7 @@ export async function POST(request: NextRequest) {
       case 'vector-space': {
         const { sampleSize = 100, dimensions = 2 } = params;
         
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.connect();
         await milvus.initializeCollection();
         
@@ -239,7 +244,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
         
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.connect();
         await milvus.initializeCollection();
         
@@ -299,7 +304,7 @@ export async function POST(request: NextRequest) {
 
       // 获取集合详细信息
       case 'collection-info': {
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.connect();
         await milvus.initializeCollection();
         
@@ -348,7 +353,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
         
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.connect();
         await milvus.initializeCollection();
         
@@ -437,7 +442,7 @@ export async function GET(request: NextRequest) {
   try {
     switch (action) {
       case 'summary': {
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         
         try {
           await milvus.connect();

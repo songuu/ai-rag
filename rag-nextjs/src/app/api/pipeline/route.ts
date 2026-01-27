@@ -7,12 +7,22 @@ import {
   storeToMilvus,
   DataSourceType 
 } from '@/lib/document-pipeline';
+import { getMilvusConnectionConfig } from '@/lib/milvus-config';
 
 // 环境变量配置
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
-const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
+
+// 获取 Milvus 配置（使用统一配置系统）
+function getMilvusConfig() {
+  const connConfig = getMilvusConnectionConfig();
+  return {
+    address: connConfig.address,
+    collectionName: connConfig.defaultCollection,
+    token: connConfig.token,
+    ssl: connConfig.ssl,
+  };
+}
 
 // POST: 处理文档
 export async function POST(request: NextRequest) {
@@ -50,10 +60,7 @@ export async function POST(request: NextRequest) {
           chunkOverlap: chunkOverlap || 50,
           embeddingModel: modelToUse,
           ollamaBaseUrl: OLLAMA_BASE_URL,
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          }
+          milvusConfig: getMilvusConfig(),
         });
         
         const result = await pipeline.processDocument(text, { filename: source });
@@ -86,10 +93,7 @@ export async function POST(request: NextRequest) {
           chunkOverlap: chunkOverlap || 50,
           embeddingModel: modelToUse,
           ollamaBaseUrl: OLLAMA_BASE_URL,
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          }
+          milvusConfig: getMilvusConfig(),
         });
         
         const result = await pipeline.processDocument(url);
@@ -122,10 +126,7 @@ export async function POST(request: NextRequest) {
           chunkOverlap: chunkOverlap || 50,
           embeddingModel: modelToUse,
           ollamaBaseUrl: OLLAMA_BASE_URL,
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          }
+          milvusConfig: getMilvusConfig(),
         });
         
         const result = await pipeline.processDocument(videoUrl, { type: 'youtube' });
@@ -187,10 +188,7 @@ export async function POST(request: NextRequest) {
           chunkOverlap: chunkOverlap || 50,
           embeddingModel: modelToUse,
           ollamaBaseUrl: OLLAMA_BASE_URL,
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          }
+          milvusConfig: getMilvusConfig(),
         });
         
         const inputs = items.map((item: any) => ({
@@ -256,10 +254,7 @@ async function handleFileUpload(request: NextRequest) {
       chunkOverlap,
       embeddingModel: modelToUse,
       ollamaBaseUrl: OLLAMA_BASE_URL,
-      milvusConfig: {
-        address: MILVUS_ADDRESS,
-        collectionName: MILVUS_COLLECTION,
-      }
+      milvusConfig: getMilvusConfig(),
     });
     
     const results = [];
@@ -346,8 +341,7 @@ export async function GET(request: NextRequest) {
               defaultChunkSize: 500,
               defaultChunkOverlap: 50,
               embeddingModel: EMBEDDING_MODEL,
-              milvusAddress: MILVUS_ADDRESS,
-              milvusCollection: MILVUS_COLLECTION,
+              milvus: getMilvusConfig(),
             }
           }
         });

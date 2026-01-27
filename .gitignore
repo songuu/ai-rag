@@ -11,3 +11,5 @@ rag-nextjs/uploads
 rag-nextjs/milvus_data
 rag-nextjs/uploads
 demo2
+demo3
+rag-nextjs/.env.local

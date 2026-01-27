@@ -11,18 +11,21 @@ import {
   getModelFactory,
   getConfigSummary,
 } from '@/lib/model-config';
+import { getMilvusConnectionConfig } from '@/lib/milvus-config';
 
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
-const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
-
-// 默认 Milvus 配置
-const defaultMilvusConfig: MilvusConfig = {
-  address: MILVUS_ADDRESS,
-  collectionName: MILVUS_COLLECTION,
-  embeddingDimension: 768,
-  indexType: 'IVF_FLAT',
-  metricType: 'COSINE',
-};
+// 获取默认 Milvus 配置（使用统一配置系统）
+function getDefaultMilvusConfig(): MilvusConfig {
+  const connConfig = getMilvusConnectionConfig();
+  return {
+    address: connConfig.address,
+    collectionName: connConfig.defaultCollection,
+    embeddingDimension: connConfig.defaultDimension,
+    indexType: connConfig.defaultIndexType,
+    metricType: connConfig.defaultMetricType,
+    token: connConfig.token,
+    ssl: connConfig.ssl,
+  };
+}
 
 /**
  * 获取 Embedding 模型 (使用统一配置系统)
@@ -222,7 +225,7 @@ async function handleMilvusQuery(
 
   try {
     // 1. 连接 Milvus (使用统一的全局实例)
-    const milvus = getMilvusInstance(defaultMilvusConfig);
+    const milvus = getMilvusInstance(getDefaultMilvusConfig());
     await milvus.connect();
     await milvus.initializeCollection();
 

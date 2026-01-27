@@ -99,35 +99,103 @@ CUSTOM_EMBEDDING_MODEL=
 
 ## Milvus 配置
 
-向量数据库配置（所有模式通用）：
+Milvus 向量数据库支持两种部署模式：
+
+### 主开关
 
 ```bash
-MILVUS_ADDRESS=localhost:19530
-MILVUS_COLLECTION=rag_documents
+# Milvus 提供商选择
+MILVUS_PROVIDER=local  # 可选: local | zilliz
+```
+
+| 值 | 说明 |
+|---|---|
+| `local` | 使用本地自建 Milvus 服务 (默认) |
+| `zilliz` | 使用 Zilliz Cloud 托管服务 |
+
+### 本地 Milvus 配置 (local)
+
+当 `MILVUS_PROVIDER=local` 时使用：
+
+```bash
+# Milvus 服务地址
+MILVUS_LOCAL_ADDRESS=localhost:19530
+
+# 认证（可选）
+MILVUS_LOCAL_USERNAME=
+MILVUS_LOCAL_PASSWORD=
+```
+
+### Zilliz Cloud 配置 (zilliz)
+
+当 `MILVUS_PROVIDER=zilliz` 时使用：
+
+```bash
+# Zilliz Cloud 集群端点 (必填)
+# ⚠️ 注意：不需要 https:// 前缀，SDK 会自动处理
+# 格式: in01-xxx.api.region.zillizcloud.com:443
+# 从 Zilliz Cloud 控制台 -> 集群 -> Connect -> Node.js 获取
+MILVUS_ZILLIZ_ENDPOINT=in01-xxx.api.gcp-us-west1.zillizcloud.com:443
+
+# API Token (必填)
+# 从 Zilliz Cloud 控制台 -> API Keys 获取
+MILVUS_ZILLIZ_TOKEN=your_api_key_here
+
+# 是否为 Serverless 实例
+MILVUS_ZILLIZ_SERVERLESS=false
+```
+
+### 通用默认配置
+
+```bash
+# 默认数据库
+MILVUS_DEFAULT_DATABASE=default
+
+# 默认集合名称
+MILVUS_DEFAULT_COLLECTION=rag_documents
+
+# 默认向量维度
+MILVUS_DEFAULT_DIMENSION=768
+
+# 默认索引类型
+MILVUS_DEFAULT_INDEX_TYPE=IVF_FLAT
+
+# 默认距离度量
+MILVUS_DEFAULT_METRIC_TYPE=COSINE
 ```
 
 ## 完整配置示例
 
-### 示例 1: 本地开发 (Ollama)
+### 示例 1: 本地开发 (Ollama + 本地 Milvus)
 
 ```bash
+# 模型配置
 MODEL_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_LLM_MODEL=llama3.1
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 OLLAMA_REASONING_MODEL=deepseek-r1
-MILVUS_ADDRESS=localhost:19530
+
+# Milvus 配置
+MILVUS_PROVIDER=local
+MILVUS_LOCAL_ADDRESS=localhost:19530
 ```
 
-### 示例 2: 生产环境 (OpenAI)
+### 示例 2: 生产环境 (OpenAI + Zilliz Cloud)
 
 ```bash
+# 模型配置
 MODEL_PROVIDER=openai
 OPENAI_API_KEY=sk-xxxxx
 OPENAI_LLM_MODEL=gpt-4o-mini
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_REASONING_MODEL=gpt-4o
-MILVUS_ADDRESS=milvus.prod.example.com:19530
+
+# Milvus 配置 - 使用 Zilliz Cloud
+MILVUS_PROVIDER=zilliz
+MILVUS_ZILLIZ_ENDPOINT=https://in01-xxx.aws-us-west-2.vectordb.zillizcloud.com:19530
+MILVUS_ZILLIZ_TOKEN=xxxxx
+MILVUS_DEFAULT_DIMENSION=1536  # OpenAI embedding 维度
 ```
 
 ### 示例 3: 使用 DeepSeek API
@@ -138,6 +206,24 @@ CUSTOM_API_KEY=sk-xxxxx
 CUSTOM_BASE_URL=https://api.deepseek.com
 CUSTOM_LLM_MODEL=deepseek-chat
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text  # DeepSeek 不提供 Embedding，仍用 Ollama
+
+# Milvus 配置
+MILVUS_PROVIDER=local
+MILVUS_LOCAL_ADDRESS=localhost:19530
+```
+
+### 示例 4: 混合模式 (本地 Ollama + Zilliz Cloud)
+
+```bash
+# 模型配置 - 使用本地 Ollama
+MODEL_PROVIDER=ollama
+OLLAMA_LLM_MODEL=llama3.1
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+
+# Milvus 配置 - 使用云端 Zilliz
+MILVUS_PROVIDER=zilliz
+MILVUS_ZILLIZ_ENDPOINT=https://in01-xxx.vectordb.zillizcloud.com:19530
+MILVUS_ZILLIZ_TOKEN=xxxxx
 ```
 
 ## 模型维度参考

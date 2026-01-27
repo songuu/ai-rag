@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { executeSCRAG, SCRAGInput, SCRAGOutput } from '@/lib/self-corrective-rag';
 import { MilvusConfig } from '@/lib/milvus-client';
+import { getMilvusConnectionConfig } from '@/lib/milvus-config';
 
 export const maxDuration = 60; // 最大执行时间 60 秒
 
@@ -46,11 +47,14 @@ export async function POST(request: NextRequest) {
       gradePassThreshold: body.gradePassThreshold || 0.6,
     });
     
-    // 构建 Milvus 配置
+    // 构建 Milvus 配置（使用统一配置系统）
+    const connConfig = getMilvusConnectionConfig();
     const milvusConfig: MilvusConfig = {
-      address: body.milvusConfig?.address || 'localhost:19530',
-      collectionName: body.milvusConfig?.collectionName || 'rag_documents',
-      embeddingDimension: body.milvusConfig?.embeddingDimension || 768,
+      address: body.milvusConfig?.address || connConfig.address,
+      collectionName: body.milvusConfig?.collectionName || connConfig.defaultCollection,
+      embeddingDimension: body.milvusConfig?.embeddingDimension || connConfig.defaultDimension,
+      token: connConfig.token,
+      ssl: connConfig.ssl,
     };
     
     // 构建输入

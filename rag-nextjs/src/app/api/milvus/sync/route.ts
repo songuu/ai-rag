@@ -2,24 +2,29 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
 import { getRagSystem } from '@/lib/rag-instance';
 import { createEmbedding, getModelFactory } from '@/lib/model-config';
+import { getMilvusConnectionConfig } from '@/lib/milvus-config';
 import fs from 'fs';
 import path from 'path';
 
 // 环境变量配置
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
-const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
 const factory = getModelFactory();
 const envConfig = factory.getEnvConfig();
 const EMBEDDING_MODEL = envConfig.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
-const defaultConfig: MilvusConfig = {
-  address: MILVUS_ADDRESS,
-  collectionName: MILVUS_COLLECTION,
-  embeddingDimension: 768,
-  indexType: 'IVF_FLAT',
-  metricType: 'COSINE',
-};
+// 获取默认 Milvus 配置（使用统一配置系统）
+function getDefaultMilvusConfig(): MilvusConfig {
+  const connConfig = getMilvusConnectionConfig();
+  return {
+    address: connConfig.address,
+    collectionName: connConfig.defaultCollection,
+    embeddingDimension: connConfig.defaultDimension,
+    indexType: connConfig.defaultIndexType,
+    metricType: connConfig.defaultMetricType,
+    token: connConfig.token,
+    ssl: connConfig.ssl,
+  };
+}
 
 // 模型维度映射
 const MODEL_DIMENSIONS: Record<string, number> = {
@@ -66,7 +71,7 @@ export async function POST(request: NextRequest) {
 
         // 获取模型维度并更新配置
         const dimension = getModelDimension(embeddingModel);
-        const config = { ...defaultConfig, embeddingDimension: dimension };
+        const config = { ...getDefaultMilvusConfig(), embeddingDimension: dimension };
 
         // 连接 Milvus
         const milvus = getMilvusInstance(config);
@@ -79,7 +84,7 @@ export async function POST(request: NextRequest) {
           await milvus.clearCollection();
         }
 
-        await milvus.initializeCollection();
+        await milvus.initializeCollection(true);
 
         // 使用统一配置系统创建 Embedding 模型
         const embeddings = createEmbedding(embeddingModel);
@@ -169,7 +174,7 @@ export async function POST(request: NextRequest) {
 
         // 获取模型维度并更新配置
         const dimension = getModelDimension(embeddingModel);
-        const config = { ...defaultConfig, embeddingDimension: dimension };
+        const config = { ...getDefaultMilvusConfig(), embeddingDimension: dimension };
 
         // 连接 Milvus
         const milvus = getMilvusInstance(config);
@@ -182,7 +187,7 @@ export async function POST(request: NextRequest) {
           await milvus.clearCollection();
         }
 
-        await milvus.initializeCollection();
+        await milvus.initializeCollection(true);
 
         // 使用统一配置系统创建 Embedding 模型
         const embeddings = createEmbedding(embeddingModel);
@@ -312,7 +317,7 @@ export async function GET() {
     // 检查 Milvus 状态
     let milvusStats = null;
     try {
-      const milvus = getMilvusInstance(defaultConfig);
+      const milvus = getMilvusInstance(getDefaultMilvusConfig());
       await milvus.connect();
       milvusStats = await milvus.getCollectionStats();
     } catch (e) {

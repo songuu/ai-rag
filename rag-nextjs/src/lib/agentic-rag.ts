@@ -20,6 +20,7 @@ import { StringOutputParser } from '@langchain/core/output_parsers';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { Embeddings } from '@langchain/core/embeddings';
 import { getMilvusInstance, MilvusConfig } from './milvus-client';
+import { getMilvusConnectionConfig } from './milvus-config';
 import { 
   createLLM, 
   createEmbedding, 
@@ -295,12 +296,16 @@ export class AgenticRAGSystem {
     console.log(`  - LLM: ${actualLlmModel}`);
     console.log(`  - Embedding: ${actualEmbeddingModel}`);
 
+    // 使用统一配置系统获取默认值
+    const connConfig = getMilvusConnectionConfig();
     this.milvusConfig = {
-      address: milvusConfig.address || process.env.MILVUS_ADDRESS || 'localhost:19530',
-      collectionName: milvusConfig.collectionName || process.env.MILVUS_COLLECTION || 'rag_documents',
-      embeddingDimension: milvusConfig.embeddingDimension || 768,
-      indexType: milvusConfig.indexType || 'IVF_FLAT',
-      metricType: milvusConfig.metricType || 'COSINE',
+      address: milvusConfig.address || connConfig.address,
+      collectionName: milvusConfig.collectionName || connConfig.defaultCollection,
+      embeddingDimension: milvusConfig.embeddingDimension || connConfig.defaultDimension,
+      indexType: milvusConfig.indexType || connConfig.defaultIndexType,
+      metricType: milvusConfig.metricType || connConfig.defaultMetricType,
+      token: milvusConfig.token || connConfig.token,
+      ssl: milvusConfig.ssl !== undefined ? milvusConfig.ssl : connConfig.ssl,
     };
 
     this.graph = this.buildGraph();

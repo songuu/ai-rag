@@ -8,26 +8,34 @@ import {
   DEFAULT_EMBEDDING_MODEL,
   DocumentInput,
 } from '@/lib/vectorization-utils';
+import { 
+  getMilvusConnectionConfig, 
+  getMilvusConfigSummary,
+  getMilvusProvider,
+  isZillizCloud,
+} from '@/lib/milvus-config';
 
-// 环境变量配置
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
-const MILVUS_USERNAME = process.env.MILVUS_USERNAME || '';
-const MILVUS_PASSWORD = process.env.MILVUS_PASSWORD || '';
-const MILVUS_DATABASE = process.env.MILVUS_DATABASE || 'default';
-const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
-const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
+// 从统一配置系统获取 Embedding 模型配置
+const EMBEDDING_MODEL = process.env.OLLAMA_EMBEDDING_MODEL || process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
 
-// 默认配置
-const defaultConfig: MilvusConfig = {
-  address: MILVUS_ADDRESS,
-  username: MILVUS_USERNAME,
-  password: MILVUS_PASSWORD,
-  database: MILVUS_DATABASE,
-  collectionName: MILVUS_COLLECTION,
-  embeddingDimension: 768,
-  indexType: 'IVF_FLAT',
-  metricType: 'COSINE',
-};
+/**
+ * 获取默认 Milvus 配置（从统一配置系统读取）
+ */
+function getDefaultMilvusConfig(): MilvusConfig {
+  const connConfig = getMilvusConnectionConfig();
+  return {
+    address: connConfig.address,
+    username: connConfig.username,
+    password: connConfig.password,
+    ssl: connConfig.ssl,
+    database: connConfig.database,
+    collectionName: connConfig.defaultCollection,
+    embeddingDimension: connConfig.defaultDimension,
+    indexType: connConfig.defaultIndexType,
+    metricType: connConfig.defaultMetricType,
+    token: connConfig.token,
+  };
+}
 
 // POST: 执行 Milvus 操作
 export async function POST(request: NextRequest) {
@@ -38,14 +46,16 @@ export async function POST(request: NextRequest) {
     switch (action) {
       // 连接到 Milvus
       case 'connect': {
+        const defaultConfig = getDefaultMilvusConfig();
         const config: MilvusConfig = {
           ...defaultConfig,
           ...params.config,
         };
+        const autoRecreate = params.autoRecreate === true;
         
         const milvus = getMilvusInstance(config);
         await milvus.connect();
-        await milvus.initializeCollection();
+        await milvus.initializeCollection(autoRecreate);
         
         const stats = await milvus.getCollectionStats();
         
@@ -53,6 +63,33 @@ export async function POST(request: NextRequest) {
           success: true,
           message: 'Connected to Milvus',
           stats,
+        });
+      }
+
+      // 重建集合（删除并重新创建）
+      case 'recreate': {
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
+        await milvus.connect();
+        await milvus.recreateCollection();
+        
+        const stats = await milvus.getCollectionStats();
+        
+        return NextResponse.json({
+          success: true,
+          message: 'Collection recreated successfully',
+          stats,
+        });
+      }
+
+      // 检查 Schema 兼容性
+      case 'check-schema': {
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
+        await milvus.connect();
+        const compatibility = await milvus.checkSchemaCompatibility();
+        
+        return NextResponse.json({
+          success: true,
+          ...compatibility,
         });
       }
 
@@ -67,7 +104,7 @@ export async function POST(request: NextRequest) {
 
       // 检查健康状态
       case 'health': {
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         const health = await milvus.checkHealth();
         return NextResponse.json({
           success: true,
@@ -77,7 +114,7 @@ export async function POST(request: NextRequest) {
 
       // 获取集合统计信息
       case 'stats': {
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         const stats = await milvus.getCollectionStats();
         return NextResponse.json({
           success: true,
@@ -100,7 +137,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
 
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.connect();
         await milvus.initializeCollection();
 
@@ -180,7 +217,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
 
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.connect();
         await milvus.initializeCollection();
 
@@ -244,7 +281,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
 
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.deleteDocuments(ids);
         
         return NextResponse.json({
@@ -255,7 +292,7 @@ export async function POST(request: NextRequest) {
 
       // 清空集合
       case 'clear': {
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.clearCollection();
         
         return NextResponse.json({
@@ -275,7 +312,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
 
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         
         // 转换为 DocumentInput 格式
         const documents: DocumentInput[] = files.map((f: any) => ({
@@ -311,7 +348,7 @@ export async function POST(request: NextRequest) {
       case 'rebuild-index': {
         const { indexType = 'IVF_FLAT', metricType = 'COSINE' } = params;
         
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.updateConfig({ indexType, metricType });
         await milvus.clearCollection();
         
@@ -332,7 +369,7 @@ export async function POST(request: NextRequest) {
           }, { status: 400 });
         }
 
-        const milvus = getMilvusInstance(defaultConfig);
+        const milvus = getMilvusInstance(getDefaultMilvusConfig());
         await milvus.updateConfig(config);
         
         return NextResponse.json({
@@ -365,6 +402,7 @@ export async function GET(request: NextRequest) {
   try {
     switch (action) {
       case 'status': {
+        const defaultConfig = getDefaultMilvusConfig();
         const milvus = getMilvusInstance(defaultConfig);
         const health = await milvus.checkHealth();
         const stats = health.healthy ? await milvus.getCollectionStats() : null;
@@ -375,6 +413,8 @@ export async function GET(request: NextRequest) {
           health,
           stats,
           config: {
+            provider: getMilvusProvider(),
+            isZillizCloud: isZillizCloud(),
             address: defaultConfig.address,
             database: defaultConfig.database,
             collectionName: defaultConfig.collectionName,
@@ -386,12 +426,11 @@ export async function GET(request: NextRequest) {
       }
 
       case 'config': {
+        const configSummary = getMilvusConfigSummary();
         return NextResponse.json({
           success: true,
           config: {
-            address: MILVUS_ADDRESS,
-            database: MILVUS_DATABASE,
-            collectionName: MILVUS_COLLECTION,
+            ...configSummary,
             embeddingModel: EMBEDDING_MODEL,
             supportedIndexTypes: ['FLAT', 'IVF_FLAT', 'IVF_SQ8', 'IVF_PQ', 'HNSW', 'ANNOY'],
             supportedMetricTypes: ['L2', 'IP', 'COSINE'],

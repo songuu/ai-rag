@@ -5,10 +5,20 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { AgenticRAGSystem, AgentState, WorkflowStep } from '@/lib/agentic-rag';
+import { getMilvusConnectionConfig } from '@/lib/milvus-config';
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
-const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
+
+// 获取 Milvus 配置（使用统一配置系统）
+function getMilvusConfig() {
+  const connConfig = getMilvusConnectionConfig();
+  return {
+    address: connConfig.address,
+    collectionName: connConfig.defaultCollection,
+    token: connConfig.token,
+    ssl: connConfig.ssl,
+  };
+}
 
 // 全局单例
 let agenticRAGInstance: AgenticRAGSystem | null = null;
@@ -19,14 +29,12 @@ function getAgenticRAG(config?: {
 }): AgenticRAGSystem {
   // 如果配置变化，重新创建实例
   if (!agenticRAGInstance || config) {
+    const milvusConfig = getMilvusConfig();
     agenticRAGInstance = new AgenticRAGSystem({
       ollamaBaseUrl: OLLAMA_BASE_URL,
       llmModel: config?.llmModel || 'llama3.1',
       embeddingModel: config?.embeddingModel || 'nomic-embed-text',
-      milvusConfig: {
-        address: MILVUS_ADDRESS,
-        collectionName: MILVUS_COLLECTION,
-      },
+      milvusConfig,
       enableHallucinationCheck: true,
       enableSelfReflection: true,
     });

@@ -1,11 +1,21 @@
 /**
  * Milvus 向量数据库客户端管理器
  * 提供连接管理、集合操作、向量存储等功能
+ * 
+ * 已更新为使用统一配置系统 (milvus-config.ts)
+ * 支持本地 Milvus 和 Zilliz Cloud 两种模式
  */
 
 import { MilvusClient, DataType, MetricType, InsertReq, SearchReq } from '@zilliz/milvus2-sdk-node';
+import {
+  getMilvusConnectionConfig,
+  createMilvusClient as createConfiguredClient,
+  isZillizCloud,
+  getMilvusProvider,
+  type MilvusConnectionConfig
+} from './milvus-config';
 
-// Milvus 配置接口
+// Milvus 配置接口（保持向后兼容）
 export interface MilvusConfig {
   address?: string;          // Milvus 服务地址 (如: localhost:19530)
   username?: string;         // 用户名（可选）
@@ -16,6 +26,7 @@ export interface MilvusConfig {
   embeddingDimension?: number; // 向量维度（默认: 768）
   indexType?: 'IVF_FLAT' | 'IVF_SQ8' | 'IVF_PQ' | 'HNSW' | 'ANNOY' | 'FLAT'; // 索引类型
   metricType?: 'L2' | 'IP' | 'COSINE'; // 距离度量类型
+  token?: string;            // Zilliz Cloud API Token（新增）
 }
 
 // 文档接口
@@ -45,21 +56,44 @@ export interface CollectionStats {
   loaded: boolean;
 }
 
-// 默认配置
-const DEFAULT_CONFIG: Required<MilvusConfig> = {
-  address: 'localhost:19530',
-  username: '',
-  password: '',
-  ssl: false,
-  database: 'default',
-  collectionName: 'rag_documents',
-  embeddingDimension: 768,
-  indexType: 'IVF_FLAT',
-  metricType: 'COSINE'
-};
+/**
+ * 获取默认配置（从统一配置系统读取）
+ */
+function getDefaultConfig(): Required<MilvusConfig> {
+  try {
+    const connConfig = getMilvusConnectionConfig();
+    return {
+      address: connConfig.address,
+      username: connConfig.username || '',
+      password: connConfig.password || '',
+      ssl: connConfig.ssl,
+      database: connConfig.database || 'default',
+      collectionName: connConfig.defaultCollection,
+      embeddingDimension: connConfig.defaultDimension,
+      indexType: connConfig.defaultIndexType,
+      metricType: connConfig.defaultMetricType,
+      token: connConfig.token || '',
+    };
+  } catch {
+    // 如果配置系统不可用，使用硬编码默认值
+    return {
+      address: 'localhost:19530',
+      username: '',
+      password: '',
+      ssl: false,
+      database: 'default',
+      collectionName: 'rag_documents',
+      embeddingDimension: 768,
+      indexType: 'IVF_FLAT',
+      metricType: 'COSINE',
+      token: '',
+    };
+  }
+}
 
 /**
  * Milvus 向量存储类
+ * 支持本地 Milvus 和 Zilliz Cloud 两种模式
  */
 export class MilvusVectorStore {
   private client: MilvusClient | null = null;
@@ -68,7 +102,8 @@ export class MilvusVectorStore {
   private isInitialized: boolean = false;
 
   constructor(config: MilvusConfig = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    const defaultConfig = getDefaultConfig();
+    this.config = { ...defaultConfig, ...config };
   }
 
   /**
@@ -80,6 +115,7 @@ export class MilvusVectorStore {
 
   /**
    * 连接到 Milvus 服务
+   * 自动处理本地 Milvus 和 Zilliz Cloud 的连接差异
    */
   async connect(): Promise<void> {
     if (this.isConnected && this.client) {
@@ -88,14 +124,29 @@ export class MilvusVectorStore {
     }
 
     try {
-      console.log(`[Milvus] Connecting to ${this.config.address}...`);
-      
-      this.client = new MilvusClient({
-        address: this.config.address,
-        username: this.config.username || undefined,
-        password: this.config.password || undefined,
-        ssl: this.config.ssl,
-      });
+      const provider = getMilvusProvider();
+      const isCloud = isZillizCloud();
+
+      console.log(`[Milvus] Connecting to ${this.config.address} (${provider})...`);
+
+      if (isCloud && this.config.token) {
+        // Zilliz Cloud 连接 - 使用 Token 认证
+        console.log('[Milvus] Using Zilliz Cloud authentication');
+        this.client = new MilvusClient({
+          address: this.config.address,
+          token: this.config.token,
+          ssl: true, // Zilliz Cloud 必须使用 SSL
+        });
+      } else {
+        // 本地 Milvus 连接 - 使用用户名密码认证（可选）
+        console.log('[Milvus] Using local Milvus authentication');
+        this.client = new MilvusClient({
+          address: this.config.address,
+          username: this.config.username || undefined,
+          password: this.config.password || undefined,
+          ssl: this.config.ssl,
+        });
+      }
 
       // 检查连接
       const health = await this.client.checkHealth();
@@ -104,11 +155,16 @@ export class MilvusVectorStore {
       }
 
       this.isConnected = true;
-      console.log('[Milvus] Connected successfully');
+      console.log(`[Milvus] Connected successfully to ${provider}`);
 
       // 使用指定数据库
       if (this.config.database !== 'default') {
-        await this.client.useDatabase({ db_name: this.config.database });
+        try {
+          await this.client.useDatabase({ db_name: this.config.database });
+          console.log(`[Milvus] Using database: ${this.config.database}`);
+        } catch (dbError) {
+          console.warn(`[Milvus] Could not switch database: ${dbError}`);
+        }
       }
     } catch (error) {
       this.isConnected = false;
@@ -141,9 +197,105 @@ export class MilvusVectorStore {
   }
 
   /**
-   * 初始化集合（创建 Schema 和索引）
+   * 检查现有集合的 Schema 是否与我们的期望兼容
    */
-  async initializeCollection(): Promise<void> {
+  async checkSchemaCompatibility(): Promise<{ compatible: boolean; reason?: string; existingSchema?: any }> {
+    const client = await this.ensureConnected();
+    const collectionName = this.config.collectionName;
+
+    try {
+      const hasCollection = await client.hasCollection({ collection_name: collectionName });
+      if (!hasCollection.value) {
+        return { compatible: true }; // 集合不存在，可以创建
+      }
+
+      // 获取集合信息
+      const collectionInfo = await client.describeCollection({ collection_name: collectionName });
+      const fields = collectionInfo.schema?.fields || [];
+
+      // 检查必需字段
+      const requiredFields = ['id', 'content', 'embedding', 'source', 'metadata_json', 'created_at'];
+      const existingFieldNames = fields.map((f: any) => f.name);
+
+      // 检查字段是否存在
+      for (const required of requiredFields) {
+        if (!existingFieldNames.includes(required)) {
+          return {
+            compatible: false,
+            reason: `缺少必需字段: ${required}`,
+            existingSchema: fields,
+          };
+        }
+      }
+
+      // 检查主键字段类型 (我们使用 VarChar，如果是 Int64 则不兼容)
+      const idField = fields.find((f: any) => f.name === 'id');
+      if (idField) {
+        // DataType.VarChar = 21, DataType.Int64 = 5
+        // data_type 可能是数字或字符串，统一转换比较
+        const dataType = Number(idField.data_type);
+        const isVarChar = dataType === Number(DataType.VarChar) || dataType === 21;
+        if (!isVarChar) {
+          return {
+            compatible: false,
+            reason: `主键字段类型不兼容: 期望 VarChar，实际为 ${idField.data_type}`,
+            existingSchema: fields,
+          };
+        }
+      }
+
+      // 检查向量维度
+      const embeddingField = fields.find((f: any) => f.name === 'embedding');
+      if (embeddingField?.type_params) {
+        const dimParam = embeddingField.type_params.find((p: any) => p.key === 'dim');
+        if (dimParam?.value !== undefined) {
+          const existingDim = parseInt(String(dimParam.value), 10);
+          if (existingDim !== this.config.embeddingDimension) {
+            return {
+              compatible: false,
+              reason: `向量维度不匹配: 集合为 ${existingDim}D，配置为 ${this.config.embeddingDimension}D`,
+              existingSchema: fields,
+            };
+          }
+        }
+      }
+
+      return { compatible: true };
+    } catch (error) {
+      console.warn('[Milvus] Schema compatibility check failed:', error);
+      return { compatible: true }; // 无法检查时默认兼容
+    }
+  }
+
+  /**
+   * 强制重建集合（删除现有集合并创建新的）
+   */
+  async recreateCollection(): Promise<void> {
+    const client = await this.ensureConnected();
+    const collectionName = this.config.collectionName;
+
+    console.log(`[Milvus] Recreating collection '${collectionName}'...`);
+
+    // 删除现有集合
+    const hasCollection = await client.hasCollection({ collection_name: collectionName });
+    if (hasCollection.value) {
+      console.log(`[Milvus] Dropping existing collection '${collectionName}'...`);
+      await client.dropCollection({ collection_name: collectionName });
+    }
+
+    // 重置状态
+    this.isInitialized = false;
+
+    // 创建新集合
+    await this.initializeCollection();
+    console.log(`[Milvus] Collection '${collectionName}' recreated successfully`);
+  }
+
+  /**
+   * 初始化集合（创建 Schema 和索引）
+   * @param autoRecreate 是否自动重建集合（如果存在则删除后重建）
+   */
+  async initializeCollection(autoRecreate: boolean = false): Promise<void> {
     const client = await this.ensureConnected();
     const collectionName = this.config.collectionName;
 
@@ -153,11 +305,39 @@ export class MilvusVectorStore {
 
       if (hasCollection.value) {
         console.log(`[Milvus] Collection '${collectionName}' already exists`);
-        
-        // 加载集合到内存
-        await this.loadCollection();
-        this.isInitialized = true;
-        return;
+
+        // // 检查 Schema 兼容性
+        // const compatibility = await this.checkSchemaCompatibility();
+        // if (!compatibility.compatible) {
+        //   console.warn(`[Milvus] ⚠️ Schema 不兼容: ${compatibility.reason}`);
+
+        //   if (autoRecreate) {
+        //     console.log(`[Milvus] 自动重建集合...`);
+        //     await this.recreateCollection();
+        //     return;
+        //   } else {
+        //     throw new Error(
+        //       `集合 Schema 不兼容: ${compatibility.reason}。` +
+        //       `请调用 recreateCollection() 方法重建集合，或在 Zilliz Cloud 控制台手动删除集合 '${collectionName}'。`
+        //     );
+        //   }
+        // }
+
+        // // 加载集合到内存
+        // await this.loadCollection();
+        // this.isInitialized = true;
+        // return;
+        if (autoRecreate) {
+          // 直接删除并重建
+          console.log(`[Milvus] Collection '${collectionName}' exists, dropping and recreating...`);
+          await client.dropCollection({ collection_name: collectionName });
+        } else {
+          // 集合已存在，直接加载使用
+          console.log(`[Milvus] Collection '${collectionName}' already exists, loading...`);
+          await this.loadCollection();
+          this.isInitialized = true;
+          return;
+        }
       }
 
       console.log(`[Milvus] Creating collection '${collectionName}'...`);
@@ -272,7 +452,7 @@ export class MilvusVectorStore {
 
     try {
       const loadState = await client.getLoadState({ collection_name: collectionName });
-      
+
       if (loadState.state !== 'LoadStateLoaded') {
         console.log(`[Milvus] Loading collection '${collectionName}'...`);
         await client.loadCollection({ collection_name: collectionName });
@@ -353,17 +533,17 @@ export class MilvusVectorStore {
     };
 
     const result = await client.insert(insertReq);
-    
+
     if (result.status.error_code !== 'Success') {
       throw new Error(`Insert failed: ${result.status.reason}`);
     }
 
     console.log(`[Milvus] Inserted ${result.insert_cnt} documents`);
-    
+
     // 刷新数据确保持久化
     console.log(`[Milvus] Flushing data...`);
     await client.flushSync({ collection_names: [collectionName] });
-    
+
     // 重新加载集合以确保新数据可被搜索
     console.log(`[Milvus] Reloading collection to make new data searchable...`);
     try {
@@ -434,11 +614,11 @@ export class MilvusVectorStore {
 
     // 转换结果
     const searchResults: MilvusSearchResult[] = [];
-    
+
     // Milvus SDK 2.x 返回的 results.results 直接是数组
     // 但如果是多向量查询，可能是嵌套数组
     let hits: any[] = [];
-    
+
     if (Array.isArray(results.results)) {
       if (results.results.length > 0) {
         // 检查是否是嵌套数组（多向量查询）
@@ -450,17 +630,17 @@ export class MilvusVectorStore {
         }
       }
     }
-    
+
     console.log('[Milvus] Parsed hits count:', hits.length);
     if (hits.length > 0) {
       console.log('[Milvus] First hit sample:', JSON.stringify(hits[0]).substring(0, 200));
     }
-    
+
     if (hits.length === 0) {
       console.warn('[Milvus] No search results returned');
       return [];
     }
-    
+
     let filteredCount = 0;
     for (const hit of hits) {
       // 计算相似度 (根据度量类型转换)
@@ -468,7 +648,7 @@ export class MilvusVectorStore {
       const rawScore = (hit as any).score;
       const rawDistance = (hit as any).distance;
       const distance = rawScore ?? rawDistance ?? 0;
-      
+
       switch (this.config.metricType) {
         case 'COSINE':
           // Milvus COSINE 度量：
@@ -517,7 +697,7 @@ export class MilvusVectorStore {
         distance: distance,
       });
     }
-    
+
     if (filteredCount > 0) {
       console.log(`[Milvus] 阈值过滤: ${filteredCount} 个结果低于阈值 ${threshold}`);
     }
@@ -534,7 +714,7 @@ export class MilvusVectorStore {
     const collectionName = this.config.collectionName;
 
     const expr = `id in [${ids.map(id => `"${id}"`).join(',')}]`;
-    
+
     await client.delete({
       collection_name: collectionName,
       filter: expr,
@@ -552,7 +732,7 @@ export class MilvusVectorStore {
 
     // 删除并重建集合
     const hasCollection = await client.hasCollection({ collection_name: collectionName });
-    
+
     if (hasCollection.value) {
       await client.dropCollection({ collection_name: collectionName });
       console.log(`[Milvus] Collection '${collectionName}' dropped`);
@@ -577,13 +757,13 @@ export class MilvusVectorStore {
 
       const stats = await client.getCollectionStatistics({ collection_name: collectionName });
       const loadState = await client.getLoadState({ collection_name: collectionName });
-      
+
       const rowCount = parseInt(stats.data.row_count || '0');
-      
+
       // 从集合 schema 获取实际的向量维度
       // 但如果集合为空（rowCount=0），返回 null 维度，表示可以使用任何模型
       let actualDimension: number | null = null;
-      
+
       if (rowCount > 0) {
         // 只有当集合有数据时，维度才"锁定"
         actualDimension = this.config.embeddingDimension;
@@ -594,8 +774,8 @@ export class MilvusVectorStore {
           );
           if (embeddingField?.type_params) {
             const dimParam = embeddingField.type_params.find((p: any) => p.key === 'dim');
-            if (dimParam?.value) {
-              actualDimension = parseInt(dimParam.value);
+            if (dimParam?.value !== undefined) {
+              actualDimension = parseInt(String(dimParam.value), 10);
               console.log(`[Milvus] Collection dimension locked at: ${actualDimension}D (${rowCount} rows)`);
             }
           }
@@ -627,7 +807,7 @@ export class MilvusVectorStore {
     try {
       const client = await this.ensureConnected();
       const health = await client.checkHealth();
-      
+
       return {
         healthy: health.isHealthy,
         message: health.isHealthy ? 'Milvus is healthy' : 'Milvus is not healthy',
@@ -646,13 +826,6 @@ export class MilvusVectorStore {
   async getDocumentCount(): Promise<number> {
     const stats = await this.getCollectionStats();
     return stats?.rowCount || 0;
-  }
-
-  /**
-   * 获取配置
-   */
-  getConfig(): Required<MilvusConfig> {
-    return { ...this.config };
   }
 
   /**
@@ -680,9 +853,9 @@ const milvusInstances: Map<string, MilvusVectorStore> = new Map();
  */
 export function getMilvusInstance(config?: MilvusConfig): MilvusVectorStore {
   const collectionName = config?.collectionName || 'rag_documents';
-  
+
   let instance = milvusInstances.get(collectionName);
-  
+
   if (!instance) {
     // 创建新实例
     instance = new MilvusVectorStore(config);
@@ -695,12 +868,12 @@ export function getMilvusInstance(config?: MilvusConfig): MilvusVectorStore {
       console.log(`[Milvus] Dimension changed for ${collectionName}, recreating instance...`);
       console.log(`[Milvus] Old: ${currentConfig.embeddingDimension}D, New: ${config.embeddingDimension}D`);
       // 断开旧连接并创建新实例
-      instance.disconnect().catch(() => {});
+      instance.disconnect().catch(() => { });
       instance = new MilvusVectorStore(config);
       milvusInstances.set(collectionName, instance);
     }
   }
-  
+
   console.log(`[Milvus] Using instance for collection: ${collectionName}`);
   return instance;
 }
@@ -747,15 +920,15 @@ const MODEL_DIMENSIONS: Record<string, number> = {
 export function getModelDimension(modelName: string): number {
   // 移除 :latest 后缀
   const baseName = modelName.split(':')[0].toLowerCase();
-  
+
   console.log(`[getModelDimension] Input: "${modelName}", BaseName: "${baseName}"`);
-  
+
   // 精确匹配
   if (MODEL_DIMENSIONS[baseName]) {
     console.log(`[getModelDimension] Exact match: ${baseName} → ${MODEL_DIMENSIONS[baseName]}D`);
     return MODEL_DIMENSIONS[baseName];
   }
-  
+
   // 部分匹配
   for (const [key, dim] of Object.entries(MODEL_DIMENSIONS)) {
     if (baseName.includes(key) || key.includes(baseName)) {
@@ -763,7 +936,7 @@ export function getModelDimension(modelName: string): number {
       return dim;
     }
   }
-  
+
   // 默认维度
   console.log(`[getModelDimension] No match, using default: 768D`);
   return 768;
@@ -774,28 +947,28 @@ export function getModelDimension(modelName: string): number {
  */
 export function selectModelByDimension(dimension: number): string {
   console.log(`[selectModelByDimension] Looking for model with dimension: ${dimension}D`);
-  
+
   // 按维度分组的模型列表（优先使用的模型在前）
   const modelsByDimension: Record<number, string[]> = {
     384: ['all-minilm'],
     768: ['nomic-embed-text', 'nomic-embed-text-v2-moe', 'paraphrase-multilingual'],
     1024: ['bge-m3', 'bge-large', 'mxbai-embed-large', 'snowflake-arctic-embed', 'e5-large', 'gte-large'],
   };
-  
+
   const candidates = modelsByDimension[dimension];
-  
+
   if (candidates && candidates.length > 0) {
     const selected = candidates[0];
     console.log(`[selectModelByDimension] Selected: ${selected} (${dimension}D)`);
     return selected;
   }
-  
+
   // 如果没有精确匹配，选择最接近的
   const availableDimensions = Object.keys(modelsByDimension).map(Number);
   const closest = availableDimensions.reduce((prev, curr) =>
     Math.abs(curr - dimension) < Math.abs(prev - dimension) ? curr : prev
   );
-  
+
   const fallback = modelsByDimension[closest][0];
   console.log(`[selectModelByDimension] No exact match, using closest: ${fallback} (${closest}D)`);
   return fallback;

@@ -1,12 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMilvusRAGSystem, resetMilvusRAGSystem } from '@/lib/rag-milvus';
+import { getMilvusConnectionConfig } from '@/lib/milvus-config';
 
 // 环境变量配置
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
 const LLM_MODEL = process.env.LLM_MODEL || 'llama3.1';
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'nomic-embed-text';
-const MILVUS_ADDRESS = process.env.MILVUS_ADDRESS || 'localhost:19530';
-const MILVUS_COLLECTION = process.env.MILVUS_COLLECTION || 'rag_documents';
+
+// 获取 Milvus 配置（使用统一配置系统）
+function getMilvusConfig() {
+  const connConfig = getMilvusConnectionConfig();
+  return {
+    address: connConfig.address,
+    collectionName: connConfig.defaultCollection,
+    token: connConfig.token,
+    ssl: connConfig.ssl,
+  };
+}
 
 // POST: RAG 操作
 export async function POST(request: NextRequest) {
@@ -17,14 +27,17 @@ export async function POST(request: NextRequest) {
     switch (action) {
       // 初始化系统
       case 'initialize': {
+        const milvusConfig = getMilvusConfig();
         const ragSystem = await getMilvusRAGSystem({
           ollamaBaseUrl: OLLAMA_BASE_URL,
           llmModel: params.llmModel || LLM_MODEL,
           embeddingModel: params.embeddingModel || EMBEDDING_MODEL,
           storageBackend: 'milvus',
           milvusConfig: {
-            address: params.milvusAddress || MILVUS_ADDRESS,
-            collectionName: params.collectionName || MILVUS_COLLECTION,
+            address: params.milvusAddress || milvusConfig.address,
+            collectionName: params.collectionName || milvusConfig.collectionName,
+            token: milvusConfig.token,
+            ssl: milvusConfig.ssl,
           },
         });
 
@@ -53,10 +66,7 @@ export async function POST(request: NextRequest) {
           llmModel: LLM_MODEL,
           embeddingModel: EMBEDDING_MODEL,
           storageBackend: 'milvus',
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          },
+          milvusConfig: getMilvusConfig(),
         });
 
         const result = await ragSystem.ask(question, { topK, threshold });
@@ -83,10 +93,7 @@ export async function POST(request: NextRequest) {
           llmModel: LLM_MODEL,
           embeddingModel: EMBEDDING_MODEL,
           storageBackend: 'milvus',
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          },
+          milvusConfig: getMilvusConfig(),
         });
 
         const results = await ragSystem.search(query, topK, threshold);
@@ -115,10 +122,7 @@ export async function POST(request: NextRequest) {
           llmModel: LLM_MODEL,
           embeddingModel: EMBEDDING_MODEL,
           storageBackend: 'milvus',
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          },
+          milvusConfig: getMilvusConfig(),
         });
 
         const ids = await ragSystem.addDocuments(documents);
@@ -137,10 +141,7 @@ export async function POST(request: NextRequest) {
           llmModel: LLM_MODEL,
           embeddingModel: EMBEDDING_MODEL,
           storageBackend: 'milvus',
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          },
+          milvusConfig: getMilvusConfig(),
         });
 
         await ragSystem.clear();
@@ -189,10 +190,7 @@ export async function GET(request: NextRequest) {
           llmModel: LLM_MODEL,
           embeddingModel: EMBEDDING_MODEL,
           storageBackend: 'milvus',
-          milvusConfig: {
-            address: MILVUS_ADDRESS,
-            collectionName: MILVUS_COLLECTION,
-          },
+          milvusConfig: getMilvusConfig(),
         });
 
         const status = await ragSystem.getStatus();

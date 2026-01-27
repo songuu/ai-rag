@@ -17,6 +17,7 @@
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { Embeddings } from '@langchain/core/embeddings';
 import { MilvusVectorStore, MilvusDocument, getMilvusInstance } from './milvus-client';
+import { getMilvusConnectionConfig } from './milvus-config';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { createEmbedding, getModelFactory } from './model-config';
@@ -633,7 +634,7 @@ export async function generateEmbeddings(
  */
 export async function storeToMilvus(
   documents: ProcessedDocument[],
-  config: { address?: string; collectionName?: string } = {},
+  config: { address?: string; collectionName?: string; token?: string; ssl?: boolean } = {},
   onProgress?: (progress: ProcessingProgress) => void
 ): Promise<string[]> {
   onProgress?.({
@@ -643,9 +644,14 @@ export async function storeToMilvus(
     message: '正在连接 Milvus...'
   });
   
+  // 使用统一配置系统获取默认值
+  const connConfig = getMilvusConnectionConfig();
+  
   const milvus = getMilvusInstance({
-    address: config.address || 'localhost:19530',
-    collectionName: config.collectionName || 'rag_documents',
+    address: config.address || connConfig.address,
+    collectionName: config.collectionName || connConfig.defaultCollection,
+    token: config.token || connConfig.token,
+    ssl: config.ssl !== undefined ? config.ssl : connConfig.ssl,
   });
   
   await milvus.connect();
