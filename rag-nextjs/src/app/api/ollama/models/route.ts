@@ -1,6 +1,134 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getConfigSummary, getCurrentProvider } from '@/lib/model-config';
+import { getEmbeddingConfigSummary, getEmbeddingProvider } from '@/lib/embedding-config';
 
 const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+
+// ==================== 提供商配置检测 ====================
+
+interface ProviderConfig {
+  llm: {
+    provider: string;
+    model: string;
+    isOllama: boolean;
+  };
+  embedding: {
+    provider: string;
+    model: string;
+    dimension: number;
+    isOllama: boolean;
+  };
+  reasoning: {
+    provider: string;
+    model: string;
+    isOllama: boolean;
+  };
+  // 是否需要加载 Ollama 本地模型
+  needsOllamaModels: boolean;
+}
+
+/**
+ * 获取当前的提供商配置
+ * 统一判断 LLM、Embedding、Reasoning 模型的提供商
+ */
+function getProviderConfig(): ProviderConfig {
+  // 获取 LLM 配置
+  const llmConfig = getConfigSummary();
+  const llmProvider = getCurrentProvider();
+  
+  // 获取 Embedding 配置
+  const embeddingConfig = getEmbeddingConfigSummary();
+  const embeddingProvider = getEmbeddingProvider();
+  
+  // 推理模型默认跟随 LLM 提供商，除非有单独配置
+  const reasoningProvider = process.env.REASONING_PROVIDER || llmProvider;
+  const reasoningModel = process.env.REASONING_MODEL || 
+    (reasoningProvider === 'ollama' ? 'deepseek-r1' : llmConfig.llmModel);
+  
+  const isLlmOllama = llmProvider === 'ollama';
+  const isEmbeddingOllama = embeddingProvider === 'ollama';
+  const isReasoningOllama = reasoningProvider === 'ollama';
+  
+  return {
+    llm: {
+      provider: llmProvider,
+      model: llmConfig.llmModel,
+      isOllama: isLlmOllama,
+    },
+    embedding: {
+      provider: embeddingProvider,
+      model: embeddingConfig.model,
+      dimension: embeddingConfig.dimension,
+      isOllama: isEmbeddingOllama,
+    },
+    reasoning: {
+      provider: reasoningProvider,
+      model: reasoningModel,
+      isOllama: isReasoningOllama,
+    },
+    // 只有当任何一个使用 Ollama 时，才需要加载本地模型
+    needsOllamaModels: isLlmOllama || isEmbeddingOllama || isReasoningOllama,
+  };
+}
+
+/**
+ * 生成远程提供商的模型信息
+ */
+function generateRemoteModelInfo(config: ProviderConfig) {
+  const result: {
+    llmModels: any[];
+    embeddingModels: any[];
+    reasoningModels: any[];
+  } = {
+    llmModels: [],
+    embeddingModels: [],
+    reasoningModels: [],
+  };
+  
+  // 远程 LLM 模型
+  if (!config.llm.isOllama) {
+    result.llmModels.push({
+      name: config.llm.model,
+      displayName: `${config.llm.model}`,
+      tag: config.llm.provider,
+      sizeFormatted: `云端 (${config.llm.provider})`,
+      category: 'llm',
+      isRemote: true,
+      provider: config.llm.provider,
+    });
+  }
+  
+  // 远程 Embedding 模型
+  if (!config.embedding.isOllama) {
+    const modelDisplayName = config.embedding.model.split('/').pop() || config.embedding.model;
+    result.embeddingModels.push({
+      name: config.embedding.model,
+      displayName: modelDisplayName,
+      tag: config.embedding.provider,
+      sizeFormatted: `云端 (${config.embedding.provider})`,
+      dimension: config.embedding.dimension,
+      category: 'embedding',
+      isRemote: true,
+      provider: config.embedding.provider,
+    });
+  }
+  
+  // 远程推理模型
+  if (!config.reasoning.isOllama) {
+    result.reasoningModels.push({
+      name: config.reasoning.model,
+      displayName: `${config.reasoning.model}`,
+      tag: config.reasoning.provider,
+      sizeFormatted: `云端 (${config.reasoning.provider})`,
+      category: 'reasoning',
+      supportsThinking: true,
+      isRemote: true,
+      provider: config.reasoning.provider,
+    });
+  }
+  
+  return result;
+}
 
 // 已知的模型分类
 const MODEL_CATEGORIES = {
@@ -205,98 +333,194 @@ async function getModelDetails(modelName: string) {
   }
 }
 
-// GET: 获取本地模型列表
+// GET: 获取模型列表（统一处理所有提供商）
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const action = searchParams.get('action');
   
   try {
-    // 检查 Ollama 状态
-    const statusResponse = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
-      method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
-    });
+    // 获取当前提供商配置
+    const providerConfig = getProviderConfig();
     
-    if (!statusResponse.ok) {
+    // 生成远程模型信息
+    const remoteModels = generateRemoteModelInfo(providerConfig);
+    
+    // 初始化结果
+    let reasoningModels: any[] = [...remoteModels.reasoningModels];
+    let llmModels: any[] = [...remoteModels.llmModels];
+    let embeddingModels: any[] = [...remoteModels.embeddingModels];
+    let unknownModels: any[] = [];
+    let allOllamaModels: any[] = [];
+    let ollamaOnline = false;
+    
+    // 如果需要加载 Ollama 模型（任何一个提供商使用 Ollama）
+    if (providerConfig.needsOllamaModels) {
+      try {
+        const statusResponse = await fetch(`${OLLAMA_BASE_URL}/api/tags`, {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (statusResponse.ok) {
+          ollamaOnline = true;
+          const data = await statusResponse.json();
+          allOllamaModels = data.models || [];
+          
+          // 分类 Ollama 本地模型
+          for (const model of allOllamaModels) {
+            const modelName = model.name;
+            const category = categorizeModel(modelName);
+            
+            const modelInfo = {
+              name: modelName,
+              displayName: modelName.split(':')[0],
+              tag: modelName.split(':')[1] || 'latest',
+              size: model.size,
+              sizeFormatted: formatBytes(model.size),
+              modifiedAt: model.modified_at,
+              digest: model.digest,
+              category,
+              supportsThinking: category === 'reasoning',
+              isRemote: false,
+              provider: 'ollama',
+            };
+            
+            // 只添加到对应的使用 Ollama 的类别
+            if (category === 'reasoning' && providerConfig.reasoning.isOllama) {
+              reasoningModels.push(modelInfo);
+            } else if (category === 'llm' && providerConfig.llm.isOllama) {
+              llmModels.push(modelInfo);
+            } else if (category === 'embedding' && providerConfig.embedding.isOllama) {
+              embeddingModels.push(modelInfo);
+            } else if (category === 'unknown') {
+              unknownModels.push(modelInfo);
+            }
+          }
+        }
+      } catch (ollamaError) {
+        console.warn('Ollama 服务不可用:', ollamaError);
+        // Ollama 不可用时，如果某个提供商需要 Ollama，记录警告
+      }
+    }
+    
+    // 如果完全不使用 Ollama（所有提供商都是远程的）
+    if (!providerConfig.needsOllamaModels) {
+      return NextResponse.json({
+        success: true,
+        hasModels: true,
+        reasoningModels,
+        llmModels,
+        embeddingModels,
+        unknownModels: [],
+        allModels: [...reasoningModels, ...llmModels, ...embeddingModels],
+        count: {
+          total: reasoningModels.length + llmModels.length + embeddingModels.length,
+          reasoning: reasoningModels.length,
+          llm: llmModels.length,
+          embedding: embeddingModels.length,
+          unknown: 0
+        },
+        providerConfig: {
+          llm: { provider: providerConfig.llm.provider, model: providerConfig.llm.model },
+          embedding: { provider: providerConfig.embedding.provider, model: providerConfig.embedding.model, dimension: providerConfig.embedding.dimension },
+          reasoning: { provider: providerConfig.reasoning.provider, model: providerConfig.reasoning.model },
+        },
+        recommended: null, // 远程提供商不需要推荐
+        status: {
+          hasRecommendedReasoning: true,
+          hasRecommendedLLM: true,
+          hasRecommendedEmbedding: true,
+          ready: true,
+          ollamaOnline: false,
+          usingRemoteProviders: true,
+        },
+        warnings: [],
+        message: '使用远程模型提供商'
+      });
+    }
+    
+    // 混合模式或纯 Ollama 模式
+    // 检查 Ollama 是否必须在线
+    const ollamaRequired = providerConfig.llm.isOllama || providerConfig.embedding.isOllama || providerConfig.reasoning.isOllama;
+    
+    if (ollamaRequired && !ollamaOnline) {
+      // 返回错误，但仍然包含远程模型信息
       return NextResponse.json({
         success: false,
         error: 'Ollama 服务未运行',
         code: 'OLLAMA_OFFLINE',
-        suggestion: '请先启动 Ollama 服务: ollama serve'
+        suggestion: '请先启动 Ollama 服务: ollama serve',
+        // 仍然返回远程模型信息
+        reasoningModels: remoteModels.reasoningModels,
+        llmModels: remoteModels.llmModels,
+        embeddingModels: remoteModels.embeddingModels,
+        providerConfig: {
+          llm: { provider: providerConfig.llm.provider, model: providerConfig.llm.model },
+          embedding: { provider: providerConfig.embedding.provider, model: providerConfig.embedding.model, dimension: providerConfig.embedding.dimension },
+          reasoning: { provider: providerConfig.reasoning.provider, model: providerConfig.reasoning.model },
+        },
+        status: {
+          ollamaOnline: false,
+          ollamaRequired: true,
+        }
       }, { status: 503 });
     }
     
-    const data = await statusResponse.json();
-
-    const allModels = data.models || [];
-    
     // 如果没有任何模型
-    if (allModels.length === 0) {
+    if (reasoningModels.length === 0 && llmModels.length === 0 && embeddingModels.length === 0) {
       return NextResponse.json({
         success: true,
         hasModels: false,
         llmModels: [],
         embeddingModels: [],
+        reasoningModels: [],
         allModels: [],
+        providerConfig: {
+          llm: { provider: providerConfig.llm.provider, model: providerConfig.llm.model },
+          embedding: { provider: providerConfig.embedding.provider, model: providerConfig.embedding.model, dimension: providerConfig.embedding.dimension },
+          reasoning: { provider: providerConfig.reasoning.provider, model: providerConfig.reasoning.model },
+        },
         recommended: RECOMMENDED_MODELS,
         message: '未检测到已安装的模型',
         suggestion: '请安装推荐的模型'
       });
     }
     
-    // 分类模型
-    const reasoningModels: any[] = [];
-    const llmModels: any[] = [];
-    const embeddingModels: any[] = [];
-    const unknownModels: any[] = [];
-    
-    for (const model of allModels) {
-      const modelName = model.name;
-      const category = categorizeModel(modelName);
-      
-      const modelInfo = {
-        name: modelName,
-        displayName: modelName.split(':')[0],
-        tag: modelName.split(':')[1] || 'latest',
-        size: model.size,
-        sizeFormatted: formatBytes(model.size),
-        modifiedAt: model.modified_at,
-        digest: model.digest,
-        category,
-        supportsThinking: category === 'reasoning'
-      };
-      
-      if (category === 'reasoning') {
-        reasoningModels.push(modelInfo);
-      } else if (category === 'llm') {
-        llmModels.push(modelInfo);
-      } else if (category === 'embedding') {
-        embeddingModels.push(modelInfo);
-      } else {
-        unknownModels.push(modelInfo);
-      }
-    }
-    
-    // 获取推荐模型状态
+    // 获取推荐模型状态（仅对 Ollama 有效）
     const recommendedStatus = {
       reasoning: RECOMMENDED_MODELS.reasoning.map(rec => ({
         ...rec,
-        installed: reasoningModels.some(m => m.name.includes(rec.name.split(':')[0]))
+        installed: reasoningModels.some(m => m.name?.includes(rec.name.split(':')[0]))
       })),
       llm: RECOMMENDED_MODELS.llm.map(rec => ({
         ...rec,
-        installed: llmModels.some(m => m.name.includes(rec.name.split(':')[0]))
+        installed: llmModels.some(m => m.name?.includes(rec.name.split(':')[0]))
       })),
       embedding: RECOMMENDED_MODELS.embedding.map(rec => ({
         ...rec,
-        installed: embeddingModels.some(m => m.name.includes(rec.name.split(':')[0]))
+        installed: embeddingModels.some(m => m.name?.includes(rec.name.split(':')[0]))
       }))
     };
     
-    // 检查是否有推荐模型已安装
-    const hasRecommendedReasoning = recommendedStatus.reasoning.some(m => m.installed);
-    const hasRecommendedLLM = recommendedStatus.llm.some(m => m.installed);
-    const hasRecommendedEmbedding = recommendedStatus.embedding.some(m => m.installed);
+    // 检查是否有推荐模型已安装（或使用远程提供商）
+    const hasRecommendedReasoning = !providerConfig.reasoning.isOllama || recommendedStatus.reasoning.some(m => m.installed);
+    const hasRecommendedLLM = !providerConfig.llm.isOllama || recommendedStatus.llm.some(m => m.installed);
+    const hasRecommendedEmbedding = !providerConfig.embedding.isOllama || recommendedStatus.embedding.some(m => m.installed);
+    
+    // 构建警告信息
+    const warnings: string[] = [];
+    if (providerConfig.reasoning.isOllama && !hasRecommendedReasoning) {
+      warnings.push('未检测到推理模型，建议安装 DeepSeek R1 或 Qwen3 以使用 Reasoning RAG');
+    }
+    if (providerConfig.llm.isOllama && !hasRecommendedLLM) {
+      warnings.push('未检测到推荐的 LLM 模型，建议安装 Llama 3.1 或 Qwen 2.5');
+    }
+    if (providerConfig.embedding.isOllama && !hasRecommendedEmbedding) {
+      warnings.push('未检测到推荐的 Embedding 模型，建议安装 nomic-embed-text');
+    }
+    if (unknownModels.length > 0) {
+      warnings.push(`检测到 ${unknownModels.length} 个未分类的模型`);
+    }
     
     return NextResponse.json({
       success: true,
@@ -305,36 +529,40 @@ export async function GET(request: NextRequest) {
       llmModels,
       embeddingModels,
       unknownModels,
-      allModels,
+      allModels: [...reasoningModels, ...llmModels, ...embeddingModels, ...unknownModels],
       count: {
-        total: allModels.length,
+        total: reasoningModels.length + llmModels.length + embeddingModels.length + unknownModels.length,
         reasoning: reasoningModels.length,
         llm: llmModels.length,
         embedding: embeddingModels.length,
         unknown: unknownModels.length
+      },
+      providerConfig: {
+        llm: { provider: providerConfig.llm.provider, model: providerConfig.llm.model },
+        embedding: { provider: providerConfig.embedding.provider, model: providerConfig.embedding.model, dimension: providerConfig.embedding.dimension },
+        reasoning: { provider: providerConfig.reasoning.provider, model: providerConfig.reasoning.model },
       },
       recommended: recommendedStatus,
       status: {
         hasRecommendedReasoning,
         hasRecommendedLLM,
         hasRecommendedEmbedding,
-        ready: hasRecommendedLLM && hasRecommendedEmbedding
+        ready: hasRecommendedLLM && hasRecommendedEmbedding,
+        ollamaOnline,
+        usingRemoteProviders: !providerConfig.needsOllamaModels || 
+          !providerConfig.llm.isOllama || 
+          !providerConfig.embedding.isOllama,
       },
-      warnings: [
-        ...(!hasRecommendedReasoning ? ['未检测到推理模型，建议安装 DeepSeek R1 或 Qwen3 以使用 Reasoning RAG'] : []),
-        ...(!hasRecommendedLLM ? ['未检测到推荐的 LLM 模型，建议安装 Llama 3.1 或 Qwen 2.5'] : []),
-        ...(!hasRecommendedEmbedding ? ['未检测到推荐的 Embedding 模型，建议安装 nomic-embed-text'] : []),
-        ...(unknownModels.length > 0 ? [`检测到 ${unknownModels.length} 个未分类的模型`] : [])
-      ]
+      warnings
     });
     
   } catch (error) {
-    console.error('Failed to fetch Ollama models:', error);
+    console.error('Failed to fetch models:', error);
     return NextResponse.json({
       success: false,
-      error: '无法连接到 Ollama 服务',
-      code: 'CONNECTION_ERROR',
-      suggestion: '请检查 Ollama 是否正在运行，默认地址: http://localhost:11434'
+      error: '获取模型列表失败',
+      code: 'FETCH_ERROR',
+      details: error instanceof Error ? error.message : String(error)
     }, { status: 500 });
   }
 }

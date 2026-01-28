@@ -62,26 +62,26 @@ export interface ModelConfig {
 export interface EnvConfig {
   // 主开关：控制使用本地还是生产模型
   MODEL_PROVIDER: ModelProvider;
-  
+
   // Ollama 配置
   OLLAMA_BASE_URL: string;
   OLLAMA_LLM_MODEL: string;
   OLLAMA_EMBEDDING_MODEL: string;
   OLLAMA_REASONING_MODEL: string;
-  
+
   // OpenAI 配置
   OPENAI_API_KEY?: string;
   OPENAI_BASE_URL?: string;
   OPENAI_LLM_MODEL: string;
   OPENAI_EMBEDDING_MODEL: string;
   OPENAI_REASONING_MODEL: string;
-  
+
   // Azure OpenAI 配置
   AZURE_OPENAI_API_KEY?: string;
   AZURE_OPENAI_ENDPOINT?: string;
   AZURE_OPENAI_LLM_DEPLOYMENT?: string;
   AZURE_OPENAI_EMBEDDING_DEPLOYMENT?: string;
-  
+
   // 自定义 API 配置
   CUSTOM_API_KEY?: string;
   CUSTOM_BASE_URL?: string;
@@ -135,26 +135,26 @@ export function loadEnvConfig(): EnvConfig {
   return {
     // 主开关
     MODEL_PROVIDER: (process.env.MODEL_PROVIDER as ModelProvider) || 'ollama',
-    
+
     // Ollama
     OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
     OLLAMA_LLM_MODEL: process.env.OLLAMA_LLM_MODEL || DEFAULT_OLLAMA_CONFIG.llm,
     OLLAMA_EMBEDDING_MODEL: process.env.OLLAMA_EMBEDDING_MODEL || DEFAULT_OLLAMA_CONFIG.embedding,
     OLLAMA_REASONING_MODEL: process.env.OLLAMA_REASONING_MODEL || DEFAULT_OLLAMA_CONFIG.reasoning,
-    
+
     // OpenAI
     OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
     OPENAI_LLM_MODEL: process.env.OPENAI_LLM_MODEL || DEFAULT_OPENAI_CONFIG.llm,
     OPENAI_EMBEDDING_MODEL: process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_OPENAI_CONFIG.embedding,
     OPENAI_REASONING_MODEL: process.env.OPENAI_REASONING_MODEL || DEFAULT_OPENAI_CONFIG.reasoning,
-    
+
     // Azure
     AZURE_OPENAI_API_KEY: process.env.AZURE_OPENAI_API_KEY,
     AZURE_OPENAI_ENDPOINT: process.env.AZURE_OPENAI_ENDPOINT,
     AZURE_OPENAI_LLM_DEPLOYMENT: process.env.AZURE_OPENAI_LLM_DEPLOYMENT,
     AZURE_OPENAI_EMBEDDING_DEPLOYMENT: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
-    
+
     // Custom
     CUSTOM_API_KEY: process.env.CUSTOM_API_KEY,
     CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL,
@@ -171,16 +171,16 @@ export function loadEnvConfig(): EnvConfig {
 class ModelRegistry {
   private static instance: ModelRegistry;
   private models: Map<string, DynamicModelEntry> = new Map();
-  
-  private constructor() {}
-  
+
+  private constructor() { }
+
   static getInstance(): ModelRegistry {
     if (!ModelRegistry.instance) {
       ModelRegistry.instance = new ModelRegistry();
     }
     return ModelRegistry.instance;
   }
-  
+
   /**
    * 注册新模型
    */
@@ -192,7 +192,7 @@ class ModelRegistry {
     this.models.set(entry.id, fullEntry);
     console.log(`[ModelRegistry] 已注册模型: ${entry.id} (${entry.type})`);
   }
-  
+
   /**
    * 注销模型
    */
@@ -203,35 +203,35 @@ class ModelRegistry {
     }
     return deleted;
   }
-  
+
   /**
    * 获取模型配置
    */
   get(id: string): DynamicModelEntry | undefined {
     return this.models.get(id);
   }
-  
+
   /**
    * 获取所有模型
    */
   getAll(): DynamicModelEntry[] {
     return Array.from(this.models.values());
   }
-  
+
   /**
    * 按类型获取模型
    */
   getByType(type: ModelType): DynamicModelEntry[] {
     return this.getAll().filter(m => m.type === type);
   }
-  
+
   /**
    * 检查模型是否存在
    */
   has(id: string): boolean {
     return this.models.has(id);
   }
-  
+
   /**
    * 清空注册表
    */
@@ -255,20 +255,20 @@ export class ModelFactory {
     reasoning: new Map(),
   };
   private registry: ModelRegistry;
-  
+
   private constructor() {
     this.envConfig = loadEnvConfig();
     this.registry = ModelRegistry.getInstance();
     console.log(`[ModelFactory] 初始化完成, 当前提供商: ${this.envConfig.MODEL_PROVIDER}`);
   }
-  
+
   static getInstance(): ModelFactory {
     if (!ModelFactory.instance) {
       ModelFactory.instance = new ModelFactory();
     }
     return ModelFactory.instance;
   }
-  
+
   /**
    * 重新加载环境配置
    */
@@ -277,37 +277,37 @@ export class ModelFactory {
     this.clearCache();
     console.log(`[ModelFactory] 配置已重新加载, 当前提供商: ${this.envConfig.MODEL_PROVIDER}`);
   }
-  
+
   /**
    * 获取当前提供商
    */
   getProvider(): ModelProvider {
     return this.envConfig.MODEL_PROVIDER;
   }
-  
+
   /**
    * 获取当前环境配置
    */
   getEnvConfig(): EnvConfig {
     return { ...this.envConfig };
   }
-  
+
   /**
    * 动态注册模型
    */
   registerModel(entry: Omit<DynamicModelEntry, 'createdAt'>): void {
     this.registry.register(entry);
   }
-  
+
   /**
    * 获取已注册的模型列表
    */
   getRegisteredModels(): DynamicModelEntry[] {
     return this.registry.getAll();
   }
-  
+
   // ==================== LLM 模型 ====================
-  
+
   /**
    * 创建 LLM 模型实例
    * @param modelName 可选的模型名称，不提供则使用环境变量配置
@@ -316,14 +316,14 @@ export class ModelFactory {
   createLLM(modelName?: string, options: Partial<ModelConfig> = {}): BaseChatModel {
     const provider = this.envConfig.MODEL_PROVIDER;
     const cacheKey = `${provider}:${modelName || 'default'}:${JSON.stringify(options)}`;
-    
+
     // 检查缓存
     if (this.cache.llm.has(cacheKey)) {
       return this.cache.llm.get(cacheKey)!;
     }
-    
+
     let llm: BaseChatModel;
-    
+
     switch (provider) {
       case 'ollama':
         llm = this.createOllamaLLM(modelName, options);
@@ -340,15 +340,15 @@ export class ModelFactory {
       default:
         throw new Error(`不支持的模型提供商: ${provider}`);
     }
-    
+
     this.cache.llm.set(cacheKey, llm);
     return llm;
   }
-  
+
   private createOllamaLLM(modelName?: string, options: Partial<ModelConfig> = {}): ChatOllama {
     const actualModel = modelName || this.envConfig.OLLAMA_LLM_MODEL;
     console.log(`[ModelFactory] 创建 Ollama LLM: ${actualModel}`);
-    
+
     return new ChatOllama({
       baseUrl: options.baseUrl || this.envConfig.OLLAMA_BASE_URL,
       model: actualModel,
@@ -356,17 +356,17 @@ export class ModelFactory {
       ...options.options,
     });
   }
-  
+
   private createOpenAILLM(modelName?: string, options: Partial<ModelConfig> = {}): ChatOpenAI {
     const actualModel = modelName || this.envConfig.OPENAI_LLM_MODEL;
     const apiKey = options.apiKey || this.envConfig.OPENAI_API_KEY;
-    
+
     if (!apiKey) {
       throw new Error('OpenAI API Key 未配置。请设置 OPENAI_API_KEY 环境变量。');
     }
-    
+
     console.log(`[ModelFactory] 创建 OpenAI LLM: ${actualModel}`);
-    
+
     return new ChatOpenAI({
       openAIApiKey: apiKey,
       modelName: actualModel,
@@ -378,18 +378,18 @@ export class ModelFactory {
       ...options.options,
     });
   }
-  
+
   private createAzureLLM(modelName?: string, options: Partial<ModelConfig> = {}): ChatOpenAI {
     const deployment = modelName || this.envConfig.AZURE_OPENAI_LLM_DEPLOYMENT;
     const apiKey = options.apiKey || this.envConfig.AZURE_OPENAI_API_KEY;
     const endpoint = options.baseUrl || this.envConfig.AZURE_OPENAI_ENDPOINT;
-    
+
     if (!apiKey || !endpoint) {
       throw new Error('Azure OpenAI 配置不完整。请设置 AZURE_OPENAI_API_KEY 和 AZURE_OPENAI_ENDPOINT。');
     }
-    
+
     console.log(`[ModelFactory] 创建 Azure OpenAI LLM: ${deployment}`);
-    
+
     return new ChatOpenAI({
       azureOpenAIApiKey: apiKey,
       azureOpenAIApiDeploymentName: deployment,
@@ -400,22 +400,22 @@ export class ModelFactory {
       ...options.options,
     });
   }
-  
+
   private createCustomLLM(modelName?: string, options: Partial<ModelConfig> = {}): ChatOpenAI {
     const actualModel = modelName || this.envConfig.CUSTOM_LLM_MODEL || 'default';
     const apiKey = options.apiKey || this.envConfig.CUSTOM_API_KEY;
     const baseUrl = options.baseUrl || this.envConfig.CUSTOM_BASE_URL;
-    
+
     if (!apiKey || !baseUrl) {
       throw new Error('自定义 API 配置不完整。请设置 CUSTOM_API_KEY 和 CUSTOM_BASE_URL。');
     }
-    
+
     console.log(`[ModelFactory] 创建自定义 LLM: ${actualModel} @ ${baseUrl}`);
-    
+
     // 使用 OpenAI 兼容 API
     return new ChatOpenAI({
-      openAIApiKey: apiKey,
-      modelName: actualModel,
+      apiKey: apiKey,
+      model: actualModel,
       temperature: options.temperature ?? 0.7,
       maxTokens: options.maxTokens,
       configuration: {
@@ -424,9 +424,9 @@ export class ModelFactory {
       ...options.options,
     });
   }
-  
+
   // ==================== Embedding 模型 ====================
-  
+
   /**
    * 创建 Embedding 模型实例
    * 
@@ -440,7 +440,7 @@ export class ModelFactory {
   createEmbedding(modelName?: string, options: Partial<ModelConfig> = {}): Embeddings {
     // 委托给独立的 Embedding 配置系统
     const embeddingFactory = getEmbeddingFactory();
-    
+
     // 转换配置格式
     const embeddingOptions: Partial<EmbeddingModelConfig> = {
       apiKey: options.apiKey,
@@ -448,12 +448,12 @@ export class ModelFactory {
       dimension: options.dimension,
       options: options.options,
     };
-    
+
     return embeddingFactory.createEmbedding(modelName, embeddingOptions);
   }
-  
+
   // ==================== Reasoning 模型 ====================
-  
+
   /**
    * 创建推理模型实例 (用于复杂推理任务)
    * @param modelName 可选的模型名称
@@ -462,19 +462,19 @@ export class ModelFactory {
   createReasoningModel(modelName?: string, options: Partial<ModelConfig> = {}): BaseChatModel {
     const provider = this.envConfig.MODEL_PROVIDER;
     const cacheKey = `reasoning:${provider}:${modelName || 'default'}:${JSON.stringify(options)}`;
-    
+
     if (this.cache.reasoning.has(cacheKey)) {
       return this.cache.reasoning.get(cacheKey)!;
     }
-    
+
     // 推理模型通常需要更低的 temperature
     const reasoningOptions = {
       ...options,
       temperature: options.temperature ?? 0,
     };
-    
+
     let model: BaseChatModel;
-    
+
     switch (provider) {
       case 'ollama':
         const ollamaModel = modelName || this.envConfig.OLLAMA_REASONING_MODEL;
@@ -486,28 +486,28 @@ export class ModelFactory {
           ...reasoningOptions.options,
         });
         break;
-        
+
       case 'openai':
         const openaiModel = modelName || this.envConfig.OPENAI_REASONING_MODEL;
         console.log(`[ModelFactory] 创建 OpenAI 推理模型: ${openaiModel}`);
         model = this.createOpenAILLM(openaiModel, reasoningOptions);
         break;
-        
+
       case 'azure':
       case 'custom':
         model = this.createLLM(modelName, reasoningOptions);
         break;
-        
+
       default:
         throw new Error(`不支持的模型提供商: ${provider}`);
     }
-    
+
     this.cache.reasoning.set(cacheKey, model);
     return model;
   }
-  
+
   // ==================== 辅助方法 ====================
-  
+
   /**
    * 获取模型维度
    * 使用独立的 Embedding 配置系统
@@ -515,7 +515,7 @@ export class ModelFactory {
   getModelDimension(modelName?: string): number {
     return getEmbeddingDimension(modelName);
   }
-  
+
   /**
    * 根据维度选择合适的模型
    * 使用独立的 Embedding 配置系统
@@ -523,7 +523,7 @@ export class ModelFactory {
   selectModelByDimension(dimension: number): string {
     return selectEmbeddingModelByDimension(dimension);
   }
-  
+
   /**
    * 清空模型缓存
    */
@@ -533,7 +533,7 @@ export class ModelFactory {
     this.cache.reasoning.clear();
     console.log('[ModelFactory] 模型缓存已清空');
   }
-  
+
   /**
    * 获取当前配置摘要
    */
@@ -549,39 +549,60 @@ export class ModelFactory {
   } {
     const provider = this.envConfig.MODEL_PROVIDER;
     const embeddingConfig = getEmbeddingConfigSummary();
-    
+
+    let llmModel = '';
+    let baseUrl = '';
+    let hasApiKey = false;
+
+    switch (provider) {
+      case 'openai':
+        llmModel = this.envConfig.OPENAI_LLM_MODEL;
+        baseUrl = this.envConfig.OPENAI_BASE_URL || 'https://api.openai.com';
+        hasApiKey = !!this.envConfig.OPENAI_API_KEY;
+        break;
+      case 'custom':
+        llmModel = this.envConfig.CUSTOM_LLM_MODEL || '';
+        baseUrl = this.envConfig.CUSTOM_BASE_URL || '';
+        hasApiKey = !!this.envConfig.CUSTOM_API_KEY;
+        break;
+      case 'azure':
+      case 'ollama':
+      default:
+        llmModel = this.envConfig.OLLAMA_LLM_MODEL;
+        baseUrl = this.envConfig.OLLAMA_BASE_URL;
+        hasApiKey = true;
+        break;
+    };
+
+
     return {
       provider,
-      llmModel: provider === 'ollama' 
-        ? this.envConfig.OLLAMA_LLM_MODEL 
-        : this.envConfig.OPENAI_LLM_MODEL,
+      llmModel,
+      baseUrl,
+      hasApiKey,
       embeddingModel: embeddingConfig.model,
       embeddingProvider: embeddingConfig.provider,
       reasoningModel: provider === 'ollama'
         ? this.envConfig.OLLAMA_REASONING_MODEL
         : this.envConfig.OPENAI_REASONING_MODEL,
-      baseUrl: provider === 'ollama'
-        ? this.envConfig.OLLAMA_BASE_URL
-        : (this.envConfig.OPENAI_BASE_URL || 'https://api.openai.com'),
-      hasApiKey: provider === 'ollama' || !!this.envConfig.OPENAI_API_KEY,
       embeddingConfig,
     };
   }
-  
+
   /**
    * 验证配置是否有效
    */
   validateConfig(): { valid: boolean; errors: string[]; embeddingValidation: ReturnType<typeof validateEmbeddingConfig> } {
     const errors: string[] = [];
     const provider = this.envConfig.MODEL_PROVIDER;
-    
+
     switch (provider) {
       case 'openai':
         if (!this.envConfig.OPENAI_API_KEY) {
           errors.push('OPENAI_API_KEY 环境变量未设置');
         }
         break;
-        
+
       case 'azure':
         if (!this.envConfig.AZURE_OPENAI_API_KEY) {
           errors.push('AZURE_OPENAI_API_KEY 环境变量未设置');
@@ -590,7 +611,7 @@ export class ModelFactory {
           errors.push('AZURE_OPENAI_ENDPOINT 环境变量未设置');
         }
         break;
-        
+
       case 'custom':
         if (!this.envConfig.CUSTOM_API_KEY) {
           errors.push('CUSTOM_API_KEY 环境变量未设置');
@@ -599,15 +620,15 @@ export class ModelFactory {
           errors.push('CUSTOM_BASE_URL 环境变量未设置');
         }
         break;
-        
+
       case 'ollama':
         // Ollama 不需要 API Key，但需要确保服务可用
         break;
     }
-    
+
     // 同时验证 Embedding 配置
     const embeddingValidation = validateEmbeddingConfig();
-    
+
     return {
       valid: errors.length === 0 && embeddingValidation.valid,
       errors: [...errors, ...embeddingValidation.errors],
@@ -688,6 +709,27 @@ export function isOllamaProvider(): boolean {
  */
 export function isOpenAIProvider(): boolean {
   return getModelFactory().getProvider() === 'openai';
+}
+
+/**
+ * 检查是否为 Azure OpenAI 提供商
+ */
+export function isAzureOpenAIProvider(): boolean {
+  return getModelFactory().getProvider() === 'azure';
+}
+
+/**
+ * 检查是否为 Custom API 提供商
+ */
+export function isCustomAPIProvider(): boolean {
+  return getModelFactory().getProvider() === 'custom';
+}
+
+/**
+ * 检查是否为 Ollama 提供商
+ */
+export function isCustomProvider(): boolean {
+  return getModelFactory().getProvider() === 'custom';
 }
 
 // ==================== 原有兼容层 ====================

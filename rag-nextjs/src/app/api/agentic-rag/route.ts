@@ -178,6 +178,7 @@ export async function POST(request: NextRequest) {
 
 // GET 请求返回系统信息
 export async function GET() {
+  const milvusConfig = getMilvusConfig();
   return NextResponse.json({
     name: 'Agentic RAG System',
     version: '1.0.0',
@@ -200,8 +201,8 @@ export async function GET() {
     ],
     config: {
       ollamaBaseUrl: OLLAMA_BASE_URL,
-      milvusAddress: MILVUS_ADDRESS,
-      milvusCollection: MILVUS_COLLECTION,
+      milvusAddress: milvusConfig.address,
+      milvusCollection: milvusConfig.collectionName,
     },
   });
 }

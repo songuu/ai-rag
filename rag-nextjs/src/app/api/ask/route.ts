@@ -332,6 +332,7 @@ async function handleAgenticQuery(
   }
 ) {
   const { topK, similarityThreshold, llmModel, embeddingModel, maxRetries } = options;
+  const milvusConfig = getDefaultMilvusConfig();
 
   try {
     // 使用统一配置系统创建 Agentic RAG 实例
@@ -339,8 +340,8 @@ async function handleAgenticQuery(
       llmModel,
       embeddingModel,
       milvusConfig: {
-        address: MILVUS_ADDRESS,
-        collectionName: MILVUS_COLLECTION,
+        address: milvusConfig.address,
+        collectionName: milvusConfig.collectionName,
       },
       enableHallucinationCheck: true,
       enableSelfReflection: true,
@@ -428,7 +429,7 @@ async function handleAdaptiveEntityQuery(
   }
 ) {
   const { topK, llmModel, embeddingModel, maxRetries, enableReranking } = options;
-
+  const milvusConfig = getDefaultMilvusConfig();
   try {
     console.log(`[Adaptive Entity RAG] 处理查询: "${question}"`);
     
@@ -437,7 +438,7 @@ async function handleAdaptiveEntityQuery(
       embeddingModel,
       maxRetries,
       enableReranking,
-      milvusCollection: MILVUS_COLLECTION, // 使用主集合
+      milvusCollection: milvusConfig.collectionName, // 使用主集合
     });
 
     const startTime = Date.now();

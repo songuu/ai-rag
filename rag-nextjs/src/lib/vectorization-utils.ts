@@ -231,7 +231,7 @@ export async function vectorizeAndInsert(
     const collectionDimension = stats?.embeddingDimension || 768;
 
     // 检查模型维度是否匹配
-    const modelDimension = getModelDimension(embeddingModel);
+    const modelDimension = getModelDimensionFromConfig(embeddingModel);
     if (modelDimension !== collectionDimension) {
       return {
         success: false,
@@ -323,7 +323,7 @@ export async function insertDocumentsWithEmbeddings(
     console.log(`[VectorizationUtils] Collection dimension: ${collectionDimension}D`);
 
     // 检查模型维度
-    const modelDimension = getModelDimension(embeddingModel);
+    const modelDimension = getModelDimensionFromConfig(embeddingModel);
     console.log(`[VectorizationUtils] Model dimension: ${modelDimension}D`);
 
     if (modelDimension !== collectionDimension) {
@@ -496,7 +496,7 @@ export function createVectorizeManager(config: {
   search: (query: string, options?: { topK?: number; filter?: string }) => Promise<any>;
   clear: () => Promise<void>;
 } {
-  const dimension = config.embeddingDimension || getModelDimension(config.embeddingModel || DEFAULT_EMBEDDING_MODEL);
+  const dimension = config.embeddingDimension || getModelDimensionFromConfig(config.embeddingModel || DEFAULT_EMBEDDING_MODEL);
   
   const milvus = getMilvusInstance({
     collectionName: config.collectionName,

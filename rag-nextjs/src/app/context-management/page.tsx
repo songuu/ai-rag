@@ -880,8 +880,8 @@ export default function ContextManagementPage() {
                       onChange={(e) => setLlmModel(e.target.value)}
                       className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                     >
-                      {llmModels.map((model) => (
-                        <option key={model.name} value={model.name}>
+                      {llmModels.map((model, index) => (
+                        <option key={`llm-${model.name}-${index}`} value={model.name}>
                           {model.displayName || model.name} {model.sizeFormatted ? `(${model.sizeFormatted})` : ''}
                         </option>
                       ))}
@@ -906,8 +906,8 @@ export default function ContextManagementPage() {
                       onChange={(e) => setEmbeddingModel(e.target.value)}
                       className="w-full px-3 py-2 bg-slate-900/80 border border-slate-600 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
                     >
-                      {embeddingModels.map((model) => (
-                        <option key={model.name} value={model.name}>
+                      {embeddingModels.map((model, index) => (
+                        <option key={`embedding-${model.name}-${index}`} value={model.name}>
                           {model.displayName || model.name} {model.dimension ? `(${model.dimension}D)` : ''}
                         </option>
                       ))}

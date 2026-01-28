@@ -1,3 +1,9 @@
+/*
+ * @Author: songyu
+ * @Date: 2026-01-09 13:56:11
+ * @LastEditTime: 2026-01-28 16:15:06
+ * @LastEditor: songyu
+ */
 import { LocalRAGSystem } from './rag-system';
 
 // 使用 globalThis 来确保在 Next.js 热重载时保持单例

@@ -13,7 +13,8 @@
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { Embeddings } from "@langchain/core/embeddings";
 import { BaseMessage, AIMessage } from "@langchain/core/messages";
-import { createLLM, createEmbedding, getModelFactory } from "./model-config";
+import { createLLM, createEmbedding, getModelFactory, getConfigSummary } from "./model-config";
+import { getEmbeddingConfigSummary } from "./embedding-config";
 
 // ==================== 类型定义 ====================
 
@@ -149,6 +150,38 @@ export interface ExtractionProgress {
 
 // ==================== 默认配置 ====================
 
+/**
+ * 获取默认的抽取配置
+ * 动态从统一配置系统获取当前配置的模型名
+ */
+function getDefaultExtractionConfig(): ExtractionConfig {
+  // 从统一配置系统获取当前模型
+  const llmConfig = getConfigSummary();
+  const embeddingConfig = getEmbeddingConfigSummary();
+  
+  return {
+    chunkSize: 500,
+    chunkOverlap: 100,
+    enableGleaning: true,
+    gleaningRounds: 1,
+    minEntityMentions: 1,
+    similarityThreshold: 0.85,
+    communityResolution: 1.0,
+    // 使用统一配置系统的模型，而不是硬编码 Ollama 模型名
+    llmModel: llmConfig.llmModel,
+    embeddingModel: embeddingConfig.model,
+    ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+    
+    // 超时配置
+    maxTotalTimeout: 10 * 60 * 1000,  // 默认最大 10 分钟
+    maxChunkTimeout: 60 * 1000,        // 单块最大 60 秒
+    baseChunkTime: 10 * 1000,          // 基础 10 秒/块
+    timeoutPerChar: 20,                // 每字符 20ms
+  };
+}
+
+// 为了向后兼容，保留 DEFAULT_EXTRACTION_CONFIG 导出
+// 但在运行时会使用动态配置
 export const DEFAULT_EXTRACTION_CONFIG: ExtractionConfig = {
   chunkSize: 500,
   chunkOverlap: 100,
@@ -157,15 +190,15 @@ export const DEFAULT_EXTRACTION_CONFIG: ExtractionConfig = {
   minEntityMentions: 1,
   similarityThreshold: 0.85,
   communityResolution: 1.0,
-  llmModel: 'qwen2.5:0.5b',
-  embeddingModel: 'nomic-embed-text',
+  llmModel: 'default', // 占位符，实际使用时会被覆盖
+  embeddingModel: 'default', // 占位符，实际使用时会被覆盖
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
   
   // 超时配置
-  maxTotalTimeout: 10 * 60 * 1000,  // 默认最大 10 分钟
-  maxChunkTimeout: 60 * 1000,        // 单块最大 60 秒
-  baseChunkTime: 10 * 1000,          // 基础 10 秒/块
-  timeoutPerChar: 20,                // 每字符 20ms
+  maxTotalTimeout: 10 * 60 * 1000,
+  maxChunkTimeout: 60 * 1000,
+  baseChunkTime: 10 * 1000,
+  timeoutPerChar: 20,
 };
 
 // ==================== 提示词模板 ====================
@@ -312,17 +345,20 @@ export class EntityExtractor {
   private aborted: boolean = false;
 
   constructor(config: Partial<ExtractionConfig> = {}) {
-    this.config = { ...DEFAULT_EXTRACTION_CONFIG, ...config };
+    // 使用动态获取的默认配置，确保使用正确的模型名
+    const defaultConfig = getDefaultExtractionConfig();
+    this.config = { ...defaultConfig, ...config };
     
     // 使用统一模型配置系统
-    this.llm = createLLM(this.config.llmModel, {
+    // 如果没有指定模型，createLLM 会自动使用当前提供商的默认模型
+    this.llm = createLLM(this.config.llmModel !== 'default' ? this.config.llmModel : undefined, {
       temperature: 0.1, // 低温度以获得更稳定的抽取结果
     });
 
-    this.embeddings = createEmbedding(this.config.embeddingModel);
+    this.embeddings = createEmbedding(this.config.embeddingModel !== 'default' ? this.config.embeddingModel : undefined);
     
     const factory = getModelFactory();
-    console.log(`[EntityExtractor] 初始化完成, 提供商: ${factory.getProvider()}`);
+    console.log(`[EntityExtractor] 初始化完成, 提供商: ${factory.getProvider()}, LLM: ${this.config.llmModel}, Embedding: ${this.config.embeddingModel}`);
   }
 
   /** 设置进度回调 */

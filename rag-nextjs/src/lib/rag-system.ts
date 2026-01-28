@@ -9,7 +9,7 @@ import { AutoTokenizer } from "@xenova/transformers";
 import { readdir, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
-import { createLLM, createEmbedding, getModelFactory, isOllamaProvider } from "./model-config";
+import { createLLM, createEmbedding, getModelFactory, isOllamaProvider, isCustomProvider } from "./model-config";
 import { getEmbeddingProvider, getEmbeddingConfigSummary } from "./embedding-config";
 
 // 接口定义
@@ -358,7 +358,7 @@ class SimpleMemoryVectorStore {
   private tokenizer: SimpleTokenizer;
 
   constructor(
-    private embeddingModel: OllamaEmbeddings,
+    private embeddingModel: Embeddings,
     private onProgress?: (progress: VectorizationProgress) => void,
     private onQueryProgress?: (progress: QueryVectorizationProgress) => void
   ) {
@@ -562,10 +562,13 @@ export class LocalRAGSystem {
   ) {
     const factory = getModelFactory();
     const envConfig = factory.getEnvConfig();
-    
+
+    const customModel = isCustomProvider() ? envConfig.CUSTOM_LLM_MODEL : null;
+
     // LLM 模型 - 从 MODEL_PROVIDER 配置
-    const llmModel = config.llmModel || (isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL);
-    
+    const llmModel = customModel || config.llmModel || (isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL);
+
+
     // Embedding 模型 - 从 EMBEDDING_PROVIDER 独立配置
     // 不再使用 isOllamaProvider()，而是使用独立的 embedding 配置系统
     const embeddingConfig = getEmbeddingConfigSummary();

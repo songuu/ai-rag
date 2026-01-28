@@ -1,18 +1,33 @@
+/*
+ * @Author: songyu
+ * @Date: 2026-01-12 20:01:51
+ * @LastEditTime: 2026-01-28 16:05:13
+ * @LastEditor: songyu
+ */
 import { NextRequest, NextResponse } from 'next/server';
 import { getRagSystem, resetRagSystem } from '@/lib/rag-instance';
 import { readdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import { LocalRAGSystem } from '@/lib/rag-system';
+import {
+  getConfigSummary,
+} from '@/lib/model-config';
+import {
+  getEmbeddingConfigSummary,
+} from '@/lib/embedding-config';
 
 const UPLOAD_DIR = path.join(process.cwd(), 'uploads');
 
 // POST /api/reinitialize - 重新初始化 RAG 系统
 export async function POST(request: NextRequest) {
   try {
+    const summary = getConfigSummary();
+    const embeddingConfig = getEmbeddingConfigSummary();
+
     // 获取请求体中的模型配置（如果有）
-    let llmModel = 'llama3.1';
-    let embeddingModel = 'nomic-embed-text';
+    let llmModel = summary.llmModel ||'llama3.1';
+    let embeddingModel = embeddingConfig.model || 'nomic-embed-text';
     
     try {
       const body = await request.json();
