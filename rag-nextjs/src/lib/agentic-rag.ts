@@ -30,6 +30,7 @@ import {
   isOllamaProvider,
   ModelConfig
 } from './model-config';
+import { getEmbeddingProvider, getEmbeddingConfigSummary } from './embedding-config';
 
 // LangSmith 追踪配置
 const LANGSMITH_ENABLED = process.env.LANGCHAIN_TRACING_V2 === 'true';
@@ -284,17 +285,17 @@ export class AgenticRAGSystem {
     );
     this.llm = createLLM(actualLlmModel, { temperature: 0, ...modelConfig });
 
-    // 使用统一模型配置系统创建 Embedding
-    const actualEmbeddingModel = embeddingModel || (
-      isOllamaProvider() ? envConfig.OLLAMA_EMBEDDING_MODEL : envConfig.OPENAI_EMBEDDING_MODEL
-    );
+    // Embedding 使用独立配置系统 (EMBEDDING_PROVIDER)
+    const embeddingConfig = getEmbeddingConfigSummary();
+    const embeddingProviderName = getEmbeddingProvider();
+    const actualEmbeddingModel = embeddingModel || embeddingConfig.model;
     this.requestedEmbeddingModel = actualEmbeddingModel;
-    this.embeddings = createEmbedding(actualEmbeddingModel, modelConfig);
+    // 不传递模型名称，让 embedding-config 自动处理
+    this.embeddings = createEmbedding(embeddingModel, modelConfig);
 
     console.log(`[Agentic RAG] 初始化完成:`);
-    console.log(`  - 提供商: ${factory.getProvider()}`);
-    console.log(`  - LLM: ${actualLlmModel}`);
-    console.log(`  - Embedding: ${actualEmbeddingModel}`);
+    console.log(`  - LLM 提供商: ${factory.getProvider()}, 模型: ${actualLlmModel}`);
+    console.log(`  - Embedding 提供商: ${embeddingProviderName}, 模型: ${embeddingConfig.model}`);
 
     // 使用统一配置系统获取默认值
     const connConfig = getMilvusConnectionConfig();

@@ -16,12 +16,17 @@ import {
   selectModelByDimension as selectModelByDimensionFromConfig,
   ModelConfig 
 } from './model-config';
+import { getEmbeddingConfigSummary, getEmbeddingDimension } from './embedding-config';
 
 // ==================== 配置常量 ====================
 
+// 使用独立的 Embedding 配置系统
+const embeddingConfig = getEmbeddingConfigSummary();
+
 // 保留这些导出以保持向后兼容性
 export const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
-export const DEFAULT_EMBEDDING_MODEL = process.env.OLLAMA_EMBEDDING_MODEL || process.env.EMBEDDING_MODEL || 'nomic-embed-text';
+// DEFAULT_EMBEDDING_MODEL 现在从 EMBEDDING_PROVIDER 获取
+export const DEFAULT_EMBEDDING_MODEL = embeddingConfig.model;
 export const DEFAULT_CHUNK_SIZE = 500;
 export const DEFAULT_CHUNK_OVERLAP = 50;
 export const DEFAULT_BATCH_SIZE = 10;

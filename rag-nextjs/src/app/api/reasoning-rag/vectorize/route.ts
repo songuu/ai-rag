@@ -11,32 +11,26 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { MilvusVectorStore } from '@/lib/milvus-client';
 import { createEmbedding, getModelFactory } from '@/lib/model-config';
+import { getEmbeddingConfigSummary, getEmbeddingDimension, ALL_EMBEDDING_DIMENSIONS } from '@/lib/embedding-config';
 
 // Reasoning RAG 专用配置
 const REASONING_UPLOAD_DIR = path.join(process.cwd(), 'reasoning-uploads');
 const REASONING_COLLECTION = 'reasoning_rag_documents';
 
-// 从统一配置系统获取默认嵌入模型
-const factory = getModelFactory();
-const envConfig = factory.getEnvConfig();
-const DEFAULT_EMBEDDING_MODEL = envConfig.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
+// 使用独立的 Embedding 配置系统
+const embeddingConfig = getEmbeddingConfigSummary();
+const DEFAULT_EMBEDDING_MODEL = embeddingConfig.model;
 
-// 模型维度映射
-const MODEL_DIMENSIONS: Record<string, number> = {
-  'nomic-embed-text': 768,
-  'mxbai-embed-large': 1024,
-  'all-minilm': 384,
-  'snowflake-arctic-embed': 1024,
-  'bge-m3': 1024,
-  'bge-large': 1024,
-  'bge-base': 768,
-  'e5-large': 1024,
-  'e5-base': 768,
-};
+// 模型维度映射 - 使用统一映射
+const MODEL_DIMENSIONS = ALL_EMBEDDING_DIMENSIONS;
 
 function getModelDimension(model: string): number {
+  // 优先使用 embedding-config 的维度
+  if (!model || model === DEFAULT_EMBEDDING_MODEL) {
+    return getEmbeddingDimension();
+  }
   const baseName = model.split(':')[0];
-  return MODEL_DIMENSIONS[baseName] || 768;
+  return MODEL_DIMENSIONS[baseName] || MODEL_DIMENSIONS[model] || 768;
 }
 
 // 文本分块函数

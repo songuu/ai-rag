@@ -6,7 +6,26 @@
  * 2. Zilliz Cloud (zilliz) - 托管的云服务
  * 
  * 通过环境变量控制使用哪种模式
+ * 
+ * 注意：默认向量维度会自动从 embedding-config.ts 获取
  */
+
+// 延迟导入 embedding-config 以避免循环依赖
+let _getEmbeddingDimension: (() => number) | null = null;
+
+function getEmbeddingDimensionLazy(): number {
+  if (!_getEmbeddingDimension) {
+    try {
+      // 动态导入避免循环依赖
+      const embeddingConfig = require('./embedding-config');
+      _getEmbeddingDimension = embeddingConfig.getEmbeddingDimension;
+    } catch (e) {
+      console.warn('[MilvusConfig] 无法加载 embedding-config，使用默认维度 768');
+      return 768;
+    }
+  }
+  return _getEmbeddingDimension?.() || 768;
+}
 
 // ==================== 类型定义 ====================
 
@@ -87,7 +106,10 @@ function loadEnvConfig(): MilvusEnvConfig {
     // 通用默认配置
     defaultDatabase: process.env.MILVUS_DEFAULT_DATABASE || 'default',
     defaultCollection: process.env.MILVUS_DEFAULT_COLLECTION || 'rag_documents',
-    defaultDimension: parseInt(process.env.MILVUS_DEFAULT_DIMENSION || '768', 10),
+    // 如果没有设置 MILVUS_DEFAULT_DIMENSION，则从 embedding-config 自动获取
+    defaultDimension: process.env.MILVUS_DEFAULT_DIMENSION 
+      ? parseInt(process.env.MILVUS_DEFAULT_DIMENSION, 10) 
+      : getEmbeddingDimensionLazy(),
     defaultIndexType: process.env.MILVUS_DEFAULT_INDEX_TYPE || 'IVF_FLAT',
     defaultMetricType: process.env.MILVUS_DEFAULT_METRIC_TYPE || 'COSINE',
   };

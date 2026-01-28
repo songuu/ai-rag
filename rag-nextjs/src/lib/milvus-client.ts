@@ -231,32 +231,39 @@ export class MilvusVectorStore {
       // 检查主键字段类型 (我们使用 VarChar，如果是 Int64 则不兼容)
       const idField = fields.find((f: any) => f.name === 'id');
       if (idField) {
+        // data_type 可能是数字、字符串或枚举值
         // DataType.VarChar = 21, DataType.Int64 = 5
-        // data_type 可能是数字或字符串，统一转换比较
-        const dataType = Number(idField.data_type);
-        const isVarChar = dataType === Number(DataType.VarChar) || dataType === 21;
+        const dataType = idField.data_type;
+        const dataTypeStr = String(dataType).toLowerCase();
+        const dataTypeNum = Number(dataType);
+        
+        // 检查是否为 VarChar 类型（支持多种表示方式）
+        const isVarChar = 
+          dataTypeStr === 'varchar' ||
+          dataTypeStr === '21' ||
+          dataTypeNum === 21 ||
+          dataTypeNum === Number(DataType.VarChar);
+        
         if (!isVarChar) {
           return {
             compatible: false,
-            reason: `主键字段类型不兼容: 期望 VarChar，实际为 ${idField.data_type}`,
+            reason: `主键字段类型不兼容: 期望 VarChar，实际为 ${dataType} (${dataTypeStr})`,
             existingSchema: fields,
           };
         }
+        console.log(`[Milvus] 主键字段类型检查通过: ${dataType} (${dataTypeStr})`);
       }
 
       // 检查向量维度
       const embeddingField = fields.find((f: any) => f.name === 'embedding');
       if (embeddingField?.type_params) {
-        const dimParam = embeddingField.type_params.find((p: any) => p.key === 'dim');
-        if (dimParam?.value !== undefined) {
-          const existingDim = parseInt(String(dimParam.value), 10);
-          if (existingDim !== this.config.embeddingDimension) {
-            return {
-              compatible: false,
-              reason: `向量维度不匹配: 集合为 ${existingDim}D，配置为 ${this.config.embeddingDimension}D`,
-              existingSchema: fields,
-            };
-          }
+        const existingDim = this.parseDimensionFromTypeParams(embeddingField.type_params);
+        if (existingDim !== null && existingDim !== this.config.embeddingDimension) {
+          return {
+            compatible: false,
+            reason: `向量维度不匹配: 集合为 ${existingDim}D，配置为 ${this.config.embeddingDimension}D`,
+            existingSchema: fields,
+          };
         }
       }
 
@@ -293,7 +300,7 @@ export class MilvusVectorStore {
 
   /**
    * 初始化集合（创建 Schema 和索引）
-   * @param autoRecreate 是否自动重建集合（如果存在则删除后重建）
+   * @param autoRecreate 是否在维度不匹配时自动重建集合
    */
   async initializeCollection(autoRecreate: boolean = false): Promise<void> {
     const client = await this.ensureConnected();
@@ -306,41 +313,36 @@ export class MilvusVectorStore {
       if (hasCollection.value) {
         console.log(`[Milvus] Collection '${collectionName}' already exists`);
 
-        // // 检查 Schema 兼容性
-        // const compatibility = await this.checkSchemaCompatibility();
-        // if (!compatibility.compatible) {
-        //   console.warn(`[Milvus] ⚠️ Schema 不兼容: ${compatibility.reason}`);
-
-        //   if (autoRecreate) {
-        //     console.log(`[Milvus] 自动重建集合...`);
-        //     await this.recreateCollection();
-        //     return;
-        //   } else {
-        //     throw new Error(
-        //       `集合 Schema 不兼容: ${compatibility.reason}。` +
-        //       `请调用 recreateCollection() 方法重建集合，或在 Zilliz Cloud 控制台手动删除集合 '${collectionName}'。`
-        //     );
-        //   }
-        // }
-
-        // // 加载集合到内存
-        // await this.loadCollection();
-        // this.isInitialized = true;
-        // return;
-        if (autoRecreate) {
-          // 直接删除并重建
-          console.log(`[Milvus] Collection '${collectionName}' exists, dropping and recreating...`);
-          await client.dropCollection({ collection_name: collectionName });
-        } else {
-          // 集合已存在，直接加载使用
-          console.log(`[Milvus] Collection '${collectionName}' already exists, loading...`);
+        // 检查 Schema 兼容性（主要是维度）
+        const compatibility = await this.checkSchemaCompatibility();
+        
+        if (compatibility.compatible) {
+          // 维度匹配，直接加载使用
+          console.log(`[Milvus] Schema compatible, loading collection...`);
           await this.loadCollection();
           this.isInitialized = true;
           return;
         }
+        
+        // 维度不匹配
+        console.warn(`[Milvus] ⚠️ Schema 不兼容: ${compatibility.reason}`);
+
+        if (autoRecreate) {
+          console.log(`[Milvus] 维度不匹配，自动重建集合...`);
+          console.log(`[Milvus] Dropping existing collection '${collectionName}'...`);
+          await client.dropCollection({ collection_name: collectionName });
+          // 继续创建新集合
+        } else {
+          throw new Error(
+            `集合 Schema 不兼容: ${compatibility.reason}。` +
+            `请调用 recreateCollection() 方法重建集合，或在 Zilliz Cloud 控制台手动删除集合 '${collectionName}'。`
+          );
+        }
       }
 
       console.log(`[Milvus] Creating collection '${collectionName}'...`);
+
+      console.log("this.config.embeddingDimension", this.config.embeddingDimension);
 
       // 创建集合
       await client.createCollection({
@@ -743,6 +745,37 @@ export class MilvusVectorStore {
   }
 
   /**
+   * 从 type_params 解析维度
+   * 支持两种格式：
+   * - 对象格式 (Milvus SDK v2.6+): { dim: "1024" } 或 { dim: 1024 }
+   * - 数组格式 (旧版): [{ key: 'dim', value: '1024' }]
+   */
+  private parseDimensionFromTypeParams(typeParams: any): number | null {
+    if (!typeParams) return null;
+
+    // 格式 1: 对象格式 { dim: "1024" } (Milvus SDK v2.6+)
+    if (typeParams.dim !== undefined) {
+      const dim = parseInt(String(typeParams.dim), 10);
+      if (!isNaN(dim) && dim > 0) {
+        return dim;
+      }
+    }
+
+    // 格式 2: 数组格式 [{ key: 'dim', value: '1024' }] (旧版)
+    if (Array.isArray(typeParams)) {
+      const dimParam = typeParams.find((p: any) => p.key === 'dim');
+      if (dimParam?.value !== undefined) {
+        const dim = parseInt(String(dimParam.value), 10);
+        if (!isNaN(dim) && dim > 0) {
+          return dim;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * 获取集合统计信息
    */
   async getCollectionStats(): Promise<CollectionStats | null> {
@@ -760,30 +793,37 @@ export class MilvusVectorStore {
 
       const rowCount = parseInt(stats.data.row_count || '0');
 
-      // 从集合 schema 获取实际的向量维度
-      // 但如果集合为空（rowCount=0），返回 null 维度，表示可以使用任何模型
+      // 始终从集合 schema 获取实际的向量维度
+      // 维度在集合创建时就已确定，与是否有数据无关
       let actualDimension: number | null = null;
 
-      if (rowCount > 0) {
-        // 只有当集合有数据时，维度才"锁定"
-        actualDimension = this.config.embeddingDimension;
-        try {
-          const collectionInfo = await client.describeCollection({ collection_name: collectionName });
-          const embeddingField = collectionInfo.schema?.fields?.find(
-            (f: any) => f.name === 'embedding' && f.type_params
-          );
-          if (embeddingField?.type_params) {
-            const dimParam = embeddingField.type_params.find((p: any) => p.key === 'dim');
-            if (dimParam?.value !== undefined) {
-              actualDimension = parseInt(String(dimParam.value), 10);
-              console.log(`[Milvus] Collection dimension locked at: ${actualDimension}D (${rowCount} rows)`);
-            }
+      try {
+        const collectionInfo = await client.describeCollection({ collection_name: collectionName });
+        console.log(`[Milvus] describeCollection response fields:`, 
+          JSON.stringify(collectionInfo.schema?.fields?.map((f: any) => ({
+            name: f.name,
+            type_params: f.type_params
+          })), null, 2)
+        );
+        
+        const embeddingField = collectionInfo.schema?.fields?.find(
+          (f: any) => f.name === 'embedding'
+        );
+        
+        if (embeddingField) {
+          actualDimension = this.parseDimensionFromTypeParams(embeddingField.type_params);
+          if (actualDimension) {
+            console.log(`[Milvus] Collection dimension from schema: ${actualDimension}D (${rowCount} rows)`);
           }
-        } catch (schemaError) {
-          console.warn('[Milvus] Could not get schema dimension, using config:', schemaError);
         }
-      } else {
-        console.log(`[Milvus] Collection is empty, dimension not locked (any embedding model allowed)`);
+      } catch (schemaError) {
+        console.warn('[Milvus] Could not get schema dimension:', schemaError);
+      }
+
+      // 如果无法从 schema 获取维度，使用配置值作为 fallback
+      if (!actualDimension) {
+        actualDimension = this.config.embeddingDimension;
+        console.log(`[Milvus] Using config dimension as fallback: ${actualDimension}D`);
       }
 
       return {
@@ -900,8 +940,9 @@ export async function resetMilvusInstance(collectionName?: string): Promise<void
   }
 }
 
-// Embedding 模型维度映射
+// Embedding 模型维度映射（包含 Ollama、SiliconFlow、OpenAI）
 const MODEL_DIMENSIONS: Record<string, number> = {
+  // Ollama 本地模型
   'nomic-embed-text': 768,
   'nomic-embed-text-v2-moe': 768,
   'mxbai-embed-large': 1024,
@@ -912,33 +953,54 @@ const MODEL_DIMENSIONS: Record<string, number> = {
   'gte-large': 1024,
   'all-minilm': 384,
   'paraphrase-multilingual': 768,
+  'qwen3-embedding': 1024,
+  // SiliconFlow 云端模型
+  'BAAI/bge-m3': 1024,
+  'BAAI/bge-large-zh-v1.5': 1024,
+  'BAAI/bge-large-en-v1.5': 1024,
+  'Pro/BAAI/bge-m3': 1024,
+  'Qwen/Qwen3-Embedding-8B': 4096,
+  'Qwen/Qwen3-Embedding-4B': 2560,
+  'Qwen/Qwen3-Embedding-0.6B': 1024,
+  'netease-youdao/bce-embedding-base_v1': 768,
+  // OpenAI 模型
+  'text-embedding-3-small': 1536,
+  'text-embedding-3-large': 3072,
+  'text-embedding-ada-002': 1536,
 };
 
 /**
- * 获取模型的向量维度
+ * 获取模型的向量维度（支持 Ollama、SiliconFlow、OpenAI 模型）
  */
 export function getModelDimension(modelName: string): number {
-  // 移除 :latest 后缀
-  const baseName = modelName.split(':')[0].toLowerCase();
-
-  console.log(`[getModelDimension] Input: "${modelName}", BaseName: "${baseName}"`);
-
-  // 精确匹配
+  // 首先精确匹配（支持 SiliconFlow 的 BAAI/bge-m3 格式）
+  if (MODEL_DIMENSIONS[modelName]) {
+    return MODEL_DIMENSIONS[modelName];
+  }
+  
+  // 移除 :latest 后缀后匹配
+  const baseName = modelName.split(':')[0];
   if (MODEL_DIMENSIONS[baseName]) {
-    console.log(`[getModelDimension] Exact match: ${baseName} → ${MODEL_DIMENSIONS[baseName]}D`);
     return MODEL_DIMENSIONS[baseName];
+  }
+
+  // 小写后匹配
+  const lowerName = baseName.toLowerCase();
+  for (const [key, dim] of Object.entries(MODEL_DIMENSIONS)) {
+    if (key.toLowerCase() === lowerName) {
+      return dim;
+    }
   }
 
   // 部分匹配
   for (const [key, dim] of Object.entries(MODEL_DIMENSIONS)) {
-    if (baseName.includes(key) || key.includes(baseName)) {
-      console.log(`[getModelDimension] Partial match: ${key} → ${dim}D`);
+    if (lowerName.includes(key.toLowerCase()) || key.toLowerCase().includes(lowerName)) {
       return dim;
     }
   }
 
   // 默认维度
-  console.log(`[getModelDimension] No match, using default: 768D`);
+  console.warn(`[getModelDimension] No match for "${modelName}", using default: 768D`);
   return 768;
 }
 
@@ -951,8 +1013,12 @@ export function selectModelByDimension(dimension: number): string {
   // 按维度分组的模型列表（优先使用的模型在前）
   const modelsByDimension: Record<number, string[]> = {
     384: ['all-minilm'],
-    768: ['nomic-embed-text', 'nomic-embed-text-v2-moe', 'paraphrase-multilingual'],
-    1024: ['bge-m3', 'bge-large', 'mxbai-embed-large', 'snowflake-arctic-embed', 'e5-large', 'gte-large'],
+    768: ['nomic-embed-text', 'nomic-embed-text-v2-moe', 'paraphrase-multilingual', 'netease-youdao/bce-embedding-base_v1'],
+    1024: ['bge-m3', 'BAAI/bge-m3', 'bge-large', 'mxbai-embed-large', 'snowflake-arctic-embed', 'e5-large', 'gte-large', 'qwen3-embedding', 'Qwen/Qwen3-Embedding-0.6B'],
+    1536: ['text-embedding-3-small', 'text-embedding-ada-002'],
+    2560: ['Qwen/Qwen3-Embedding-4B'],
+    3072: ['text-embedding-3-large'],
+    4096: ['Qwen/Qwen3-Embedding-8B'],
   };
 
   const candidates = modelsByDimension[dimension];

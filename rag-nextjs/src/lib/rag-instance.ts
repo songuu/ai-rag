@@ -25,11 +25,10 @@ export async function getRagSystem(): Promise<LocalRAGSystem> {
     try {
       console.log('[RAG Instance] Creating new RAG system instance...');
       
-      const instance = new LocalRAGSystem({
-        ollamaBaseUrl: "http://localhost:11434",
-        llmModel: "llama3.1",
-        embeddingModel: "nomic-embed-text",
-      });
+      // 使用空配置，让 LocalRAGSystem 从环境变量自动获取配置
+      // LLM 使用 MODEL_PROVIDER
+      // Embedding 使用 EMBEDDING_PROVIDER (独立配置)
+      const instance = new LocalRAGSystem({});
 
       // 初始化数据库
       await instance.initializeDatabase();

@@ -2,13 +2,28 @@
 
 import React, { useState, useEffect } from 'react';
 
-interface ModelConfigSummary {
+// LLM 配置
+interface LLMConfig {
   provider: string;
-  llmModel: string;
-  embeddingModel: string;
+  model: string;
   reasoningModel: string;
   baseUrl: string;
   hasApiKey: boolean;
+}
+
+// Embedding 配置 (独立)
+interface EmbeddingConfig {
+  provider: string;
+  model: string;
+  dimension: number;
+  baseUrl: string;
+  hasApiKey: boolean;
+}
+
+// 完整配置
+interface ModelConfigSummary {
+  llm: LLMConfig;
+  embedding: EmbeddingConfig;
   registeredModels: Array<{
     id: string;
     type: string;
@@ -27,14 +42,18 @@ interface ValidationResult {
 interface ModelConfigResponse {
   success: boolean;
   config: ModelConfigSummary;
-  validation: ValidationResult;
+  validation: {
+    llm: ValidationResult;
+    embedding: ValidationResult;
+    overall: ValidationResult;
+  };
   timestamp: string;
   error?: string;
 }
 
 export function ModelConfigPanel() {
   const [config, setConfig] = useState<ModelConfigSummary | null>(null);
-  const [validation, setValidation] = useState<ValidationResult | null>(null);
+  const [validation, setValidation] = useState<{ llm: ValidationResult; embedding: ValidationResult; overall: ValidationResult } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -85,15 +104,17 @@ export function ModelConfigPanel() {
   const getProviderBadgeColor = (provider: string) => {
     switch (provider) {
       case 'ollama':
-        return 'bg-green-100 text-green-800 border-green-300';
+        return 'bg-green-900/50 text-green-400 border-green-700';
       case 'openai':
-        return 'bg-blue-100 text-blue-800 border-blue-300';
+        return 'bg-blue-900/50 text-blue-400 border-blue-700';
       case 'azure':
-        return 'bg-purple-100 text-purple-800 border-purple-300';
+        return 'bg-purple-900/50 text-purple-400 border-purple-700';
+      case 'siliconflow':
+        return 'bg-cyan-900/50 text-cyan-400 border-cyan-700';
       case 'custom':
-        return 'bg-orange-100 text-orange-800 border-orange-300';
+        return 'bg-orange-900/50 text-orange-400 border-orange-700';
       default:
-        return 'bg-gray-100 text-gray-800 border-gray-300';
+        return 'bg-gray-900/50 text-gray-400 border-gray-700';
     }
   };
 
@@ -105,6 +126,8 @@ export function ModelConfigPanel() {
         return '🤖';
       case 'azure':
         return '☁️';
+      case 'siliconflow':
+        return '⚡';
       case 'custom':
         return '🔧';
       default:
@@ -142,6 +165,9 @@ export function ModelConfigPanel() {
 
   if (!config) return null;
 
+  const llmProvider = config.llm?.provider || 'unknown';
+  const embeddingProvider = config.embedding?.provider || 'unknown';
+
   return (
     <div className="bg-slate-800/50 rounded-lg border border-slate-700 overflow-hidden">
       {/* Header */}
@@ -150,12 +176,15 @@ export function ModelConfigPanel() {
         className="w-full px-4 py-3 flex items-center justify-between hover:bg-slate-700/30 transition-colors"
       >
         <div className="flex items-center gap-3">
-          <span className="text-lg">{getProviderIcon(config.provider)}</span>
+          <span className="text-lg">{getProviderIcon(llmProvider)}</span>
           <span className="font-medium text-slate-200">模型配置</span>
-          <span className={`px-2 py-0.5 text-xs font-medium rounded border ${getProviderBadgeColor(config.provider)}`}>
-            {config.provider.toUpperCase()}
+          <span className={`px-2 py-0.5 text-xs font-medium rounded border ${getProviderBadgeColor(llmProvider)}`}>
+            LLM: {llmProvider.toUpperCase()}
           </span>
-          {validation && !validation.valid && (
+          <span className={`px-2 py-0.5 text-xs font-medium rounded border ${getProviderBadgeColor(embeddingProvider)}`}>
+            EMB: {embeddingProvider.toUpperCase()}
+          </span>
+          {validation && !validation.overall?.valid && (
             <span className="px-2 py-0.5 text-xs font-medium rounded bg-red-900/50 text-red-400 border border-red-700">
               ⚠️ 配置错误
             </span>
@@ -170,64 +199,108 @@ export function ModelConfigPanel() {
       {expanded && (
         <div className="px-4 pb-4 space-y-4">
           {/* 验证错误 */}
-          {validation && !validation.valid && (
+          {validation && !validation.overall?.valid && (
             <div className="bg-red-900/20 rounded p-3 border border-red-800">
               <div className="text-red-400 text-sm font-medium mb-2">配置错误:</div>
               <ul className="list-disc list-inside text-red-300 text-sm space-y-1">
-                {validation.errors.map((err, i) => (
+                {validation.overall?.errors?.map((err, i) => (
                   <li key={i}>{err}</li>
                 ))}
               </ul>
             </div>
           )}
 
-          {/* 模型信息 */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
-              <div className="text-xs text-slate-500 mb-1">LLM 模型</div>
-              <div className="text-slate-200 font-mono text-sm truncate" title={config.llmModel}>
-                {config.llmModel}
+          {/* LLM 配置 */}
+          <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm font-medium text-slate-300">🤖 LLM 配置</span>
+              <span className={`px-2 py-0.5 text-xs rounded border ${getProviderBadgeColor(llmProvider)}`}>
+                {llmProvider}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <div className="text-xs text-slate-500 mb-1">对话模型</div>
+                <div className="text-slate-200 font-mono text-sm truncate" title={config.llm?.model}>
+                  {config.llm?.model || '-'}
+                </div>
+              </div>
+              <div>
+                <div className="text-xs text-slate-500 mb-1">推理模型</div>
+                <div className="text-slate-200 font-mono text-sm truncate" title={config.llm?.reasoningModel}>
+                  {config.llm?.reasoningModel || '-'}
+                </div>
               </div>
             </div>
-            <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
-              <div className="text-xs text-slate-500 mb-1">Embedding 模型</div>
-              <div className="text-slate-200 font-mono text-sm truncate" title={config.embeddingModel}>
-                {config.embeddingModel}
+            <div className="mt-2 flex items-center justify-between">
+              <div className="text-xs text-slate-500">
+                端点: <span className="text-slate-400 font-mono">{config.llm?.baseUrl || '-'}</span>
               </div>
-            </div>
-            <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
-              <div className="text-xs text-slate-500 mb-1">推理模型</div>
-              <div className="text-slate-200 font-mono text-sm truncate" title={config.reasoningModel}>
-                {config.reasoningModel}
-              </div>
+              {config.llm?.hasApiKey ? (
+                <span className="px-2 py-0.5 text-xs bg-green-900/50 text-green-400 rounded border border-green-700">
+                  ✓ API Key
+                </span>
+              ) : llmProvider === 'ollama' ? (
+                <span className="px-2 py-0.5 text-xs bg-blue-900/50 text-blue-400 rounded border border-blue-700">
+                  本地模式
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 text-xs bg-yellow-900/50 text-yellow-400 rounded border border-yellow-700">
+                  ⚠️ 无 Key
+                </span>
+              )}
             </div>
           </div>
 
-          {/* 连接信息 */}
+          {/* Embedding 配置 (独立) */}
           <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-sm font-medium text-slate-300">📊 Embedding 配置</span>
+              <span className={`px-2 py-0.5 text-xs rounded border ${getProviderBadgeColor(embeddingProvider)}`}>
+                {embeddingProvider}
+              </span>
+              {embeddingProvider === 'siliconflow' && (
+                <span className="px-2 py-0.5 text-xs bg-cyan-900/50 text-cyan-400 rounded border border-cyan-700">
+                  ⭐ 硅基流动
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
-                <div className="text-xs text-slate-500 mb-1">API 端点</div>
-                <div className="text-slate-200 font-mono text-sm truncate" title={config.baseUrl}>
-                  {config.baseUrl}
+                <div className="text-xs text-slate-500 mb-1">模型</div>
+                <div className="text-slate-200 font-mono text-sm truncate" title={config.embedding?.model}>
+                  {config.embedding?.model || '-'}
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                {config.hasApiKey ? (
-                  <span className="px-2 py-1 text-xs bg-green-900/50 text-green-400 rounded border border-green-700">
-                    ✓ API Key 已配置
-                  </span>
-                ) : (
-                  <span className="px-2 py-1 text-xs bg-yellow-900/50 text-yellow-400 rounded border border-yellow-700">
-                    {config.provider === 'ollama' ? '本地模式' : '⚠️ 未配置 API Key'}
-                  </span>
-                )}
+              <div>
+                <div className="text-xs text-slate-500 mb-1">向量维度</div>
+                <div className="text-slate-200 font-mono text-sm">
+                  {config.embedding?.dimension || '-'}
+                </div>
               </div>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <div className="text-xs text-slate-500">
+                端点: <span className="text-slate-400 font-mono">{config.embedding?.baseUrl || '-'}</span>
+              </div>
+              {config.embedding?.hasApiKey ? (
+                <span className="px-2 py-0.5 text-xs bg-green-900/50 text-green-400 rounded border border-green-700">
+                  ✓ API Key
+                </span>
+              ) : embeddingProvider === 'ollama' ? (
+                <span className="px-2 py-0.5 text-xs bg-blue-900/50 text-blue-400 rounded border border-blue-700">
+                  本地模式
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 text-xs bg-yellow-900/50 text-yellow-400 rounded border border-yellow-700">
+                  ⚠️ 无 Key
+                </span>
+              )}
             </div>
           </div>
 
           {/* 动态注册的模型 */}
-          {config.registeredModels.length > 0 && (
+          {config.registeredModels && config.registeredModels.length > 0 && (
             <div className="bg-slate-900/50 rounded p-3 border border-slate-700">
               <div className="text-xs text-slate-500 mb-2">动态注册的模型 ({config.registeredModels.length})</div>
               <div className="space-y-2">
@@ -269,9 +342,16 @@ export function ModelConfigPanel() {
           </div>
 
           {/* 配置说明 */}
-          <div className="text-xs text-slate-500 pt-2 border-t border-slate-700">
-            <p>通过环境变量 <code className="bg-slate-900 px-1 rounded">MODEL_PROVIDER</code> 控制使用本地 Ollama 或生产 API。</p>
-            <p className="mt-1">可选值: <code className="bg-slate-900 px-1 rounded">ollama</code> | <code className="bg-slate-900 px-1 rounded">openai</code> | <code className="bg-slate-900 px-1 rounded">azure</code> | <code className="bg-slate-900 px-1 rounded">custom</code></p>
+          <div className="text-xs text-slate-500 pt-2 border-t border-slate-700 space-y-1">
+            <p>
+              <code className="bg-slate-900 px-1 rounded">MODEL_PROVIDER</code> 控制 LLM 提供商
+            </p>
+            <p>
+              <code className="bg-slate-900 px-1 rounded">EMBEDDING_PROVIDER</code> 独立控制 Embedding 提供商
+            </p>
+            <p className="text-slate-600">
+              支持: ollama | siliconflow | openai | azure | custom
+            </p>
           </div>
         </div>
       )}

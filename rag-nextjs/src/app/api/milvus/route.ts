@@ -14,9 +14,11 @@ import {
   getMilvusProvider,
   isZillizCloud,
 } from '@/lib/milvus-config';
+import { getEmbeddingConfigSummary } from '@/lib/embedding-config';
 
-// 从统一配置系统获取 Embedding 模型配置
-const EMBEDDING_MODEL = process.env.OLLAMA_EMBEDDING_MODEL || process.env.OPENAI_EMBEDDING_MODEL || DEFAULT_EMBEDDING_MODEL;
+// 使用独立的 Embedding 配置系统
+const embeddingConfig = getEmbeddingConfigSummary();
+const EMBEDDING_MODEL = embeddingConfig.model;
 
 /**
  * 获取默认 Milvus 配置（从统一配置系统读取）

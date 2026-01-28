@@ -3,13 +3,13 @@ import { getMilvusInstance, MilvusConfig } from '@/lib/milvus-client';
 import { getRagSystem } from '@/lib/rag-instance';
 import { createEmbedding, getModelFactory } from '@/lib/model-config';
 import { getMilvusConnectionConfig } from '@/lib/milvus-config';
+import { getEmbeddingConfigSummary, getEmbeddingDimension, ALL_EMBEDDING_DIMENSIONS } from '@/lib/embedding-config';
 import fs from 'fs';
 import path from 'path';
 
-// 环境变量配置
-const factory = getModelFactory();
-const envConfig = factory.getEnvConfig();
-const EMBEDDING_MODEL = envConfig.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
+// 使用独立的 Embedding 配置
+const embeddingConfig = getEmbeddingConfigSummary();
+const EMBEDDING_MODEL = embeddingConfig.model;
 const UPLOADS_DIR = path.join(process.cwd(), 'uploads');
 
 // 获取默认 Milvus 配置（使用统一配置系统）
@@ -26,17 +26,16 @@ function getDefaultMilvusConfig(): MilvusConfig {
   };
 }
 
-// 模型维度映射
-const MODEL_DIMENSIONS: Record<string, number> = {
-  'nomic-embed-text': 768,
-  'mxbai-embed-large': 1024,
-  'bge-large': 1024,
-  'bge-m3': 1024,
-};
+// 模型维度映射 - 使用 embedding-config 中的统一映射
+const MODEL_DIMENSIONS = ALL_EMBEDDING_DIMENSIONS;
 
 function getModelDimension(model: string): number {
-  const baseName = model.split(':')[0].toLowerCase();
-  return MODEL_DIMENSIONS[baseName] || 768;
+  // 优先使用 embedding-config 的维度获取函数
+  if (!model || model === EMBEDDING_MODEL) {
+    return getEmbeddingDimension();
+  }
+  const baseName = model.split(':')[0];
+  return MODEL_DIMENSIONS[baseName] || MODEL_DIMENSIONS[model] || 768;
 }
 
 // POST: 同步文档到 Milvus

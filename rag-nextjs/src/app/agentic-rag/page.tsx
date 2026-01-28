@@ -51,12 +51,28 @@ interface AvailableModels {
 
 // 推荐的 Embedding 模型配置（用于显示维度信息）
 const EMBEDDING_MODEL_DIMENSIONS: Record<string, number> = {
+  // Ollama 本地模型
   'nomic-embed-text': 768,
+  'nomic-embed-text-v2-moe': 768,
   'bge-m3': 1024,
   'bge-large': 1024,
   'mxbai-embed-large': 1024,
   'snowflake-arctic-embed': 1024,
   'all-minilm': 384,
+  'qwen3-embedding': 1024,
+  // SiliconFlow 云端模型
+  'BAAI/bge-m3': 1024,
+  'BAAI/bge-large-zh-v1.5': 1024,
+  'BAAI/bge-large-en-v1.5': 1024,
+  'Pro/BAAI/bge-m3': 1024,
+  'Qwen/Qwen3-Embedding-8B': 4096,
+  'Qwen/Qwen3-Embedding-4B': 2560,
+  'Qwen/Qwen3-Embedding-0.6B': 1024,
+  'netease-youdao/bce-embedding-base_v1': 768,
+  // OpenAI 模型
+  'text-embedding-3-small': 1536,
+  'text-embedding-3-large': 3072,
+  'text-embedding-ada-002': 1536,
 };
 
 export default function AgenticRAGPage() {
@@ -74,20 +90,61 @@ export default function AgenticRAGPage() {
   // 模型列表状态
   const [availableModels, setAvailableModels] = useState<AvailableModels | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
+  
+  // 模型提供商配置
+  const [embeddingProvider, setEmbeddingProvider] = useState<string>('ollama');
+  const [embeddingDimension, setEmbeddingDimension] = useState<number>(768);
+  const isRemoteEmbedding = embeddingProvider !== 'ollama';
 
   // 获取可用模型列表
   const loadAvailableModels = useCallback(async () => {
     setLoadingModels(true);
     try {
+      // 首先获取系统配置
+      const healthResponse = await fetch('/api/health');
+      const healthData = await healthResponse.json();
+      
+      if (healthData.modelConfig?.embedding) {
+        const embConfig = healthData.modelConfig.embedding;
+        setEmbeddingProvider(embConfig.provider || 'ollama');
+        setEmbeddingDimension(embConfig.dimension || 768);
+        
+        // 如果是远程 Embedding 提供商，使用配置的模型
+        if (embConfig.provider && embConfig.provider !== 'ollama') {
+          setEmbeddingModel(embConfig.model);
+          setAvailableModels(prev => ({
+            ...prev,
+            success: true,
+            llmModels: prev?.llmModels || [],
+            embeddingModels: [{
+              name: embConfig.model,
+              displayName: embConfig.model.split('/').pop() || embConfig.model,
+              sizeFormatted: `${embConfig.dimension}D`,
+            }],
+          }));
+        }
+      }
+      
+      // 加载本地 Ollama 模型
       const response = await fetch('/api/ollama/models');
       const data = await response.json();
       if (data.success) {
-        setAvailableModels(data);
-        // 如果当前选中的模型不在列表中，选择第一个可用的
+        // 如果是远程 Embedding，保留之前设置的 embeddingModels
+        if (isRemoteEmbedding) {
+          setAvailableModels(prev => ({
+            ...data,
+            embeddingModels: prev?.embeddingModels || data.embeddingModels,
+          }));
+        } else {
+          setAvailableModels(data);
+        }
+        
+        // 如果当前选中的 LLM 模型不在列表中，选择第一个可用的
         if (data.llmModels?.length > 0 && !data.llmModels.some((m: ModelInfo) => m.name === llmModel)) {
           setLlmModel(data.llmModels[0].name);
         }
-        if (data.embeddingModels?.length > 0 && !data.embeddingModels.some((m: ModelInfo) => m.name === embeddingModel)) {
+        // 只有 Ollama Embedding 时才自动切换
+        if (!isRemoteEmbedding && data.embeddingModels?.length > 0 && !data.embeddingModels.some((m: ModelInfo) => m.name === embeddingModel)) {
           setEmbeddingModel(data.embeddingModels[0].name);
         }
       }
@@ -96,7 +153,7 @@ export default function AgenticRAGPage() {
     } finally {
       setLoadingModels(false);
     }
-  }, [llmModel, embeddingModel]);
+  }, [llmModel, embeddingModel, isRemoteEmbedding]);
 
   // 初始化时加载模型
   useEffect(() => {
@@ -111,10 +168,28 @@ export default function AgenticRAGPage() {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
-  // 获取模型维度
+  // 获取模型维度（支持 Ollama、SiliconFlow、OpenAI 模型）
   const getModelDimension = (modelName: string): number | undefined => {
-    const baseName = modelName.split(':')[0].toLowerCase();
-    return EMBEDDING_MODEL_DIMENSIONS[baseName];
+    // 首先精确匹配（支持 SiliconFlow 的 BAAI/bge-m3 格式）
+    if (EMBEDDING_MODEL_DIMENSIONS[modelName]) {
+      return EMBEDDING_MODEL_DIMENSIONS[modelName];
+    }
+    
+    // 移除 :latest 标签后匹配
+    const baseName = modelName.split(':')[0];
+    if (EMBEDDING_MODEL_DIMENSIONS[baseName]) {
+      return EMBEDDING_MODEL_DIMENSIONS[baseName];
+    }
+    
+    // 小写匹配
+    const lowerName = baseName.toLowerCase();
+    for (const [key, value] of Object.entries(EMBEDDING_MODEL_DIMENSIONS)) {
+      if (key.toLowerCase() === lowerName) {
+        return value;
+      }
+    }
+    
+    return undefined;
   };
 
   // 执行 Agentic RAG 查询
@@ -385,48 +460,80 @@ export default function AgenticRAGPage() {
                 {/* Embedding 模型 */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-sm text-white/70">
-                      <i className="fas fa-vector-square text-blue-400"></i>
-                      Embedding 模型
-                    </label>
-                    {getModelDimension(embeddingModel) && (
+                    <div className="flex items-center gap-2">
+                      <label className="flex items-center gap-2 text-sm text-white/70">
+                        <i className="fas fa-vector-square text-blue-400"></i>
+                        Embedding 模型
+                      </label>
+                      {/* 提供商徽章 */}
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        embeddingProvider === 'ollama' ? 'bg-gray-500/30 text-gray-300' :
+                        embeddingProvider === 'siliconflow' ? 'bg-purple-500/30 text-purple-300' :
+                        embeddingProvider === 'openai' ? 'bg-green-500/30 text-green-300' :
+                        'bg-orange-500/30 text-orange-300'
+                      }`}>
+                        {embeddingProvider === 'ollama' ? 'Ollama' :
+                         embeddingProvider === 'siliconflow' ? 'SiliconFlow' :
+                         embeddingProvider === 'openai' ? 'OpenAI' :
+                         embeddingProvider}
+                      </span>
+                    </div>
+                    {(isRemoteEmbedding ? embeddingDimension : getModelDimension(embeddingModel)) && (
                       <span className="text-xs px-2 py-0.5 bg-blue-500/20 text-blue-300 rounded-full">
-                        {getModelDimension(embeddingModel)}D
+                        {isRemoteEmbedding ? embeddingDimension : getModelDimension(embeddingModel)}D
                       </span>
                     )}
                   </div>
-                  <div className="relative">
-                    <select
-                      value={embeddingModel}
-                      onChange={(e) => setEmbeddingModel(e.target.value)}
-                      disabled={loadingModels}
-                      className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-900/40 to-cyan-900/40 border border-blue-500/30 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-400 appearance-none cursor-pointer transition-all hover:border-blue-400/50 disabled:opacity-50"
-                    >
-                      {loadingModels ? (
-                        <option>加载中...</option>
-                      ) : availableModels?.embeddingModels?.length ? (
-                        availableModels.embeddingModels.map((model) => {
-                          const dim = getModelDimension(model.name);
-                          return (
-                            <option key={model.name} value={model.name} className="bg-slate-800">
-                              {model.name} {dim ? `(${dim}D)` : ''} - {formatSize(model.size)}
-                            </option>
-                          );
-                        })
-                      ) : (
-                        <>
-                          <option value="nomic-embed-text" className="bg-slate-800">Nomic Embed Text (768D)</option>
-                          <option value="bge-m3" className="bg-slate-800">BGE-M3 (1024D)</option>
-                          <option value="bge-large" className="bg-slate-800">BGE Large (1024D)</option>
-                          <option value="mxbai-embed-large" className="bg-slate-800">MxBai Embed Large (1024D)</option>
-                        </>
-                      )}
-                    </select>
-                    <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                      <i className="fas fa-chevron-down text-blue-400/60 text-xs"></i>
+                  {isRemoteEmbedding ? (
+                    /* 远程提供商：显示只读配置信息 */
+                    <div className="px-4 py-2.5 bg-gradient-to-r from-blue-900/40 to-cyan-900/40 border border-blue-500/30 rounded-xl">
+                      <div className="flex items-center justify-between">
+                        <span className="text-white">{embeddingModel}</span>
+                        <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="通过环境变量配置">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                        </svg>
+                      </div>
+                      <div className="text-xs text-white/40 mt-1">通过环境变量配置</div>
                     </div>
-                  </div>
-                  {availableModels?.embeddingModels?.length ? (
+                  ) : (
+                    <div className="relative">
+                      <select
+                        value={embeddingModel}
+                        onChange={(e) => setEmbeddingModel(e.target.value)}
+                        disabled={loadingModels}
+                        className="w-full px-4 py-2.5 bg-gradient-to-r from-blue-900/40 to-cyan-900/40 border border-blue-500/30 rounded-xl text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-400 appearance-none cursor-pointer transition-all hover:border-blue-400/50 disabled:opacity-50"
+                      >
+                        {loadingModels ? (
+                          <option>加载中...</option>
+                        ) : availableModels?.embeddingModels?.length ? (
+                          availableModels.embeddingModels.map((model) => {
+                            const dim = getModelDimension(model.name);
+                            return (
+                              <option key={model.name} value={model.name} className="bg-slate-800">
+                                {model.name} {dim ? `(${dim}D)` : ''} - {formatSize(model.size)}
+                              </option>
+                            );
+                          })
+                        ) : (
+                          <>
+                            <option value="nomic-embed-text" className="bg-slate-800">Nomic Embed Text (768D)</option>
+                            <option value="bge-m3" className="bg-slate-800">BGE-M3 (1024D)</option>
+                            <option value="bge-large" className="bg-slate-800">BGE Large (1024D)</option>
+                            <option value="mxbai-embed-large" className="bg-slate-800">MxBai Embed Large (1024D)</option>
+                          </>
+                        )}
+                      </select>
+                      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                        <i className="fas fa-chevron-down text-blue-400/60 text-xs"></i>
+                      </div>
+                    </div>
+                  )}
+                  {isRemoteEmbedding ? (
+                    <div className="text-xs text-purple-400/60 flex items-center gap-1">
+                      <i className="fas fa-cloud"></i>
+                      使用远程 Embedding 服务
+                    </div>
+                  ) : availableModels?.embeddingModels?.length ? (
                     <div className="text-xs text-white/40 flex items-center gap-1">
                       <i className="fas fa-check-circle text-green-400"></i>
                       {availableModels.embeddingModels.length} 个 Embedding 模型可用

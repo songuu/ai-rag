@@ -100,12 +100,28 @@ interface AvailableModels {
 
 // 推荐的 Embedding 模型配置（用于显示维度信息）
 const EMBEDDING_MODEL_DIMENSIONS: Record<string, number> = {
+  // Ollama 本地模型
   'nomic-embed-text': 768,
+  'nomic-embed-text-v2-moe': 768,
   'bge-m3': 1024,
   'bge-large': 1024,
   'mxbai-embed-large': 1024,
   'snowflake-arctic-embed': 1024,
   'all-minilm': 384,
+  'qwen3-embedding': 1024,
+  // SiliconFlow 云端模型
+  'BAAI/bge-m3': 1024,
+  'BAAI/bge-large-zh-v1.5': 1024,
+  'BAAI/bge-large-en-v1.5': 1024,
+  'Pro/BAAI/bge-m3': 1024,
+  'Qwen/Qwen3-Embedding-8B': 4096,
+  'Qwen/Qwen3-Embedding-4B': 2560,
+  'Qwen/Qwen3-Embedding-0.6B': 1024,
+  'netease-youdao/bce-embedding-base_v1': 768,
+  // OpenAI 模型
+  'text-embedding-3-small': 1536,
+  'text-embedding-3-large': 3072,
+  'text-embedding-ada-002': 1536,
 };
 
 // ==================== 常量 ====================
@@ -237,10 +253,28 @@ export default function AdaptiveEntityRAGPage() {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   };
 
-  // 获取模型维度
+  // 获取模型维度（支持 Ollama、SiliconFlow、OpenAI 模型）
   const getModelDimension = (modelName: string): number | undefined => {
-    const baseName = modelName.split(':')[0].toLowerCase();
-    return EMBEDDING_MODEL_DIMENSIONS[baseName];
+    // 首先精确匹配（支持 SiliconFlow 的 BAAI/bge-m3 格式）
+    if (EMBEDDING_MODEL_DIMENSIONS[modelName]) {
+      return EMBEDDING_MODEL_DIMENSIONS[modelName];
+    }
+    
+    // 移除 :latest 标签后匹配
+    const baseName = modelName.split(':')[0];
+    if (EMBEDDING_MODEL_DIMENSIONS[baseName]) {
+      return EMBEDDING_MODEL_DIMENSIONS[baseName];
+    }
+    
+    // 小写匹配
+    const lowerName = baseName.toLowerCase();
+    for (const [key, value] of Object.entries(EMBEDDING_MODEL_DIMENSIONS)) {
+      if (key.toLowerCase() === lowerName) {
+        return value;
+      }
+    }
+    
+    return undefined;
   };
 
   // 根据集合维度过滤兼容的 embedding 模型

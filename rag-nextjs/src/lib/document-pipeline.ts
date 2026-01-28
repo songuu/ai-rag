@@ -21,6 +21,7 @@ import { getMilvusConnectionConfig } from './milvus-config';
 import { v4 as uuidv4 } from 'uuid';
 import * as XLSX from 'xlsx';
 import { createEmbedding, getModelFactory } from './model-config';
+import { getEmbeddingConfigSummary } from './embedding-config';
 
 // ============== 类型定义 ==============
 
@@ -594,14 +595,14 @@ export async function generateEmbeddings(
   config: { embeddingModel?: string; ollamaBaseUrl?: string } = {},
   onProgress?: (progress: ProcessingProgress) => void
 ): Promise<ProcessedDocument[]> {
-  const factory = getModelFactory();
-  const envConfig = factory.getEnvConfig();
+  // 使用独立的 Embedding 配置系统
+  const embeddingConfig = getEmbeddingConfigSummary();
   
   const { 
-    embeddingModel = envConfig.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text', 
+    embeddingModel = embeddingConfig.model, 
   } = config;
   
-  // 使用统一配置系统创建 Embedding 模型
+  // 使用统一配置系统创建 Embedding 模型 (会根据 EMBEDDING_PROVIDER 自动选择)
   const embeddings = createEmbedding(embeddingModel);
   
   const results: ProcessedDocument[] = [];
@@ -647,15 +648,24 @@ export async function storeToMilvus(
   // 使用统一配置系统获取默认值
   const connConfig = getMilvusConnectionConfig();
   
+  // 从实际的嵌入向量中获取维度
+  const embeddingDimension = documents[0]?.embedding?.length;
+  if (!embeddingDimension) {
+    throw new Error('Documents have no valid embedding vectors');
+  }
+  console.log(`[Pipeline] Using embedding dimension: ${embeddingDimension}D`);
+  
   const milvus = getMilvusInstance({
     address: config.address || connConfig.address,
     collectionName: config.collectionName || connConfig.defaultCollection,
     token: config.token || connConfig.token,
     ssl: config.ssl !== undefined ? config.ssl : connConfig.ssl,
+    embeddingDimension: embeddingDimension, // 传递实际的嵌入维度
   });
   
   await milvus.connect();
-  await milvus.initializeCollection();
+  // 使用 autoRecreate=true 以便在维度不匹配时自动重建集合
+  await milvus.initializeCollection(true);
   
   onProgress?.({
     stage: 'storing',

@@ -9,12 +9,32 @@
  * 3. ModelConfig: 模型配置接口
  * 4. ModelFactory: 模型工厂类，统一创建模型实例
  * 5. ModelRegistry: 模型注册表，支持动态添加模型
+ * 
+ * 注意：Embedding 已独立到 embedding-config.ts
+ * - LLM 提供商由 MODEL_PROVIDER 控制
+ * - Embedding 提供商由 EMBEDDING_PROVIDER 控制
+ * - 两者完全解耦，可独立配置
  */
 
 import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
 import { ChatOpenAI, OpenAIEmbeddings } from '@langchain/openai';
 import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { Embeddings } from '@langchain/core/embeddings';
+
+// 导入独立的 Embedding 配置系统
+import {
+  EmbeddingFactory,
+  getEmbeddingFactory,
+  createEmbeddingModel,
+  getEmbeddingDimension,
+  getEmbeddingProvider,
+  selectEmbeddingModelByDimension,
+  getEmbeddingConfigSummary,
+  validateEmbeddingConfig,
+  EmbeddingProvider,
+  EmbeddingModelConfig,
+  ALL_EMBEDDING_DIMENSIONS,
+} from './embedding-config';
 
 // ==================== 类型定义 ====================
 
@@ -87,23 +107,11 @@ export interface DynamicModelEntry {
 
 // ==================== 常量定义 ====================
 
-/** 默认模型维度映射 */
-export const MODEL_DIMENSIONS: Record<string, number> = {
-  // Ollama Embedding 模型
-  'nomic-embed-text': 768,
-  'nomic-embed-text-v2-moe': 768,
-  'bge-m3': 1024,
-  'bge-large': 1024,
-  'all-minilm': 384,
-  'mxbai-embed-large': 1024,
-  'snowflake-arctic-embed': 1024,
-  'qwen3-embedding': 1024,
-  
-  // OpenAI Embedding 模型
-  'text-embedding-3-small': 1536,
-  'text-embedding-3-large': 3072,
-  'text-embedding-ada-002': 1536,
-};
+/** 
+ * 默认模型维度映射 
+ * @deprecated 请使用 embedding-config.ts 中的 ALL_EMBEDDING_DIMENSIONS
+ */
+export const MODEL_DIMENSIONS: Record<string, number> = ALL_EMBEDDING_DIMENSIONS;
 
 /** 默认模型配置 */
 const DEFAULT_OLLAMA_CONFIG = {
@@ -421,107 +429,27 @@ export class ModelFactory {
   
   /**
    * 创建 Embedding 模型实例
+   * 
+   * 注意：Embedding 现在使用独立配置系统 (embedding-config.ts)
+   * - Embedding 提供商由 EMBEDDING_PROVIDER 环境变量控制
+   * - 与 LLM 提供商 (MODEL_PROVIDER) 完全解耦
+   * 
    * @param modelName 可选的模型名称
    * @param options 额外配置选项
    */
   createEmbedding(modelName?: string, options: Partial<ModelConfig> = {}): Embeddings {
-    const provider = this.envConfig.MODEL_PROVIDER;
-    const cacheKey = `${provider}:${modelName || 'default'}:${JSON.stringify(options)}`;
+    // 委托给独立的 Embedding 配置系统
+    const embeddingFactory = getEmbeddingFactory();
     
-    if (this.cache.embedding.has(cacheKey)) {
-      return this.cache.embedding.get(cacheKey)!;
-    }
+    // 转换配置格式
+    const embeddingOptions: Partial<EmbeddingModelConfig> = {
+      apiKey: options.apiKey,
+      baseUrl: options.baseUrl,
+      dimension: options.dimension,
+      options: options.options,
+    };
     
-    let embedding: Embeddings;
-    
-    switch (provider) {
-      case 'ollama':
-        embedding = this.createOllamaEmbedding(modelName, options);
-        break;
-      case 'openai':
-      case 'azure':
-      case 'custom':
-        embedding = this.createOpenAIEmbedding(modelName, options);
-        break;
-      default:
-        throw new Error(`不支持的模型提供商: ${provider}`);
-    }
-    
-    this.cache.embedding.set(cacheKey, embedding);
-    return embedding;
-  }
-  
-  private createOllamaEmbedding(modelName?: string, options: Partial<ModelConfig> = {}): OllamaEmbeddings {
-    const actualModel = modelName || this.envConfig.OLLAMA_EMBEDDING_MODEL;
-    console.log(`[ModelFactory] 创建 Ollama Embedding: ${actualModel}`);
-    
-    return new OllamaEmbeddings({
-      baseUrl: options.baseUrl || this.envConfig.OLLAMA_BASE_URL,
-      model: actualModel,
-      ...options.options,
-    });
-  }
-  
-  private createOpenAIEmbedding(modelName?: string, options: Partial<ModelConfig> = {}): OpenAIEmbeddings {
-    const provider = this.envConfig.MODEL_PROVIDER;
-    let actualModel: string;
-    let apiKey: string | undefined;
-    let baseUrl: string | undefined;
-    
-    if (provider === 'azure') {
-      actualModel = modelName || this.envConfig.AZURE_OPENAI_EMBEDDING_DEPLOYMENT || 'text-embedding-ada-002';
-      apiKey = options.apiKey || this.envConfig.AZURE_OPENAI_API_KEY;
-      
-      if (!apiKey) {
-        throw new Error('Azure OpenAI API Key 未配置。');
-      }
-      
-      console.log(`[ModelFactory] 创建 Azure Embedding: ${actualModel}`);
-      
-      return new OpenAIEmbeddings({
-        azureOpenAIApiKey: apiKey,
-        azureOpenAIApiDeploymentName: actualModel,
-        azureOpenAIApiInstanceName: this.envConfig.AZURE_OPENAI_ENDPOINT?.replace('https://', '').replace('.openai.azure.com', ''),
-        azureOpenAIApiVersion: '2024-02-15-preview',
-        ...options.options,
-      });
-    } else if (provider === 'custom') {
-      actualModel = modelName || this.envConfig.CUSTOM_EMBEDDING_MODEL || 'text-embedding-3-small';
-      apiKey = options.apiKey || this.envConfig.CUSTOM_API_KEY;
-      baseUrl = options.baseUrl || this.envConfig.CUSTOM_BASE_URL;
-      
-      if (!apiKey || !baseUrl) {
-        throw new Error('自定义 API 配置不完整。');
-      }
-      
-      console.log(`[ModelFactory] 创建自定义 Embedding: ${actualModel} @ ${baseUrl}`);
-      
-      return new OpenAIEmbeddings({
-        openAIApiKey: apiKey,
-        modelName: actualModel,
-        configuration: {
-          baseURL: baseUrl,
-        },
-        ...options.options,
-      });
-    } else {
-      actualModel = modelName || this.envConfig.OPENAI_EMBEDDING_MODEL;
-      apiKey = options.apiKey || this.envConfig.OPENAI_API_KEY;
-      baseUrl = options.baseUrl || this.envConfig.OPENAI_BASE_URL;
-      
-      if (!apiKey) {
-        throw new Error('OpenAI API Key 未配置。请设置 OPENAI_API_KEY 环境变量。');
-      }
-      
-      console.log(`[ModelFactory] 创建 OpenAI Embedding: ${actualModel}`);
-      
-      return new OpenAIEmbeddings({
-        openAIApiKey: apiKey,
-        modelName: actualModel,
-        configuration: baseUrl ? { baseURL: baseUrl } : undefined,
-        ...options.options,
-      });
-    }
+    return embeddingFactory.createEmbedding(modelName, embeddingOptions);
   }
   
   // ==================== Reasoning 模型 ====================
@@ -582,35 +510,18 @@ export class ModelFactory {
   
   /**
    * 获取模型维度
+   * 使用独立的 Embedding 配置系统
    */
   getModelDimension(modelName?: string): number {
-    const actualModel = modelName || 
-      (this.envConfig.MODEL_PROVIDER === 'ollama' 
-        ? this.envConfig.OLLAMA_EMBEDDING_MODEL 
-        : this.envConfig.OPENAI_EMBEDDING_MODEL);
-    
-    return MODEL_DIMENSIONS[actualModel] || 768;
+    return getEmbeddingDimension(modelName);
   }
   
   /**
    * 根据维度选择合适的模型
+   * 使用独立的 Embedding 配置系统
    */
   selectModelByDimension(dimension: number): string {
-    const provider = this.envConfig.MODEL_PROVIDER;
-    
-    // 按提供商筛选模型
-    const providerModels = provider === 'ollama' 
-      ? ['nomic-embed-text', 'bge-m3', 'all-minilm', 'qwen3-embedding']
-      : ['text-embedding-3-small', 'text-embedding-3-large', 'text-embedding-ada-002'];
-    
-    for (const model of providerModels) {
-      if (MODEL_DIMENSIONS[model] === dimension) {
-        return model;
-      }
-    }
-    
-    // 返回默认模型
-    return provider === 'ollama' ? 'nomic-embed-text' : 'text-embedding-3-small';
+    return selectEmbeddingModelByDimension(dimension);
   }
   
   /**
@@ -630,20 +541,22 @@ export class ModelFactory {
     provider: ModelProvider;
     llmModel: string;
     embeddingModel: string;
+    embeddingProvider: EmbeddingProvider;
     reasoningModel: string;
     baseUrl: string;
     hasApiKey: boolean;
+    embeddingConfig: ReturnType<typeof getEmbeddingConfigSummary>;
   } {
     const provider = this.envConfig.MODEL_PROVIDER;
+    const embeddingConfig = getEmbeddingConfigSummary();
     
     return {
       provider,
       llmModel: provider === 'ollama' 
         ? this.envConfig.OLLAMA_LLM_MODEL 
         : this.envConfig.OPENAI_LLM_MODEL,
-      embeddingModel: provider === 'ollama'
-        ? this.envConfig.OLLAMA_EMBEDDING_MODEL
-        : this.envConfig.OPENAI_EMBEDDING_MODEL,
+      embeddingModel: embeddingConfig.model,
+      embeddingProvider: embeddingConfig.provider,
       reasoningModel: provider === 'ollama'
         ? this.envConfig.OLLAMA_REASONING_MODEL
         : this.envConfig.OPENAI_REASONING_MODEL,
@@ -651,13 +564,14 @@ export class ModelFactory {
         ? this.envConfig.OLLAMA_BASE_URL
         : (this.envConfig.OPENAI_BASE_URL || 'https://api.openai.com'),
       hasApiKey: provider === 'ollama' || !!this.envConfig.OPENAI_API_KEY,
+      embeddingConfig,
     };
   }
   
   /**
    * 验证配置是否有效
    */
-  validateConfig(): { valid: boolean; errors: string[] } {
+  validateConfig(): { valid: boolean; errors: string[]; embeddingValidation: ReturnType<typeof validateEmbeddingConfig> } {
     const errors: string[] = [];
     const provider = this.envConfig.MODEL_PROVIDER;
     
@@ -691,9 +605,13 @@ export class ModelFactory {
         break;
     }
     
+    // 同时验证 Embedding 配置
+    const embeddingValidation = validateEmbeddingConfig();
+    
     return {
-      valid: errors.length === 0,
-      errors,
+      valid: errors.length === 0 && embeddingValidation.valid,
+      errors: [...errors, ...embeddingValidation.errors],
+      embeddingValidation,
     };
   }
 }

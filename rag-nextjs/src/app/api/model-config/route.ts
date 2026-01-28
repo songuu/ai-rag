@@ -6,6 +6,11 @@ import {
   ModelType,
   DynamicModelEntry,
 } from '@/lib/model-config';
+import {
+  getEmbeddingConfigSummary,
+  validateEmbeddingConfig,
+  reloadEmbeddingConfig,
+} from '@/lib/embedding-config';
 
 /**
  * 获取当前模型配置
@@ -16,11 +21,31 @@ export async function GET() {
     const summary = getConfigSummary();
     const validation = factory.validateConfig();
     const registeredModels = factory.getRegisteredModels();
+    
+    // 获取独立的 Embedding 配置
+    const embeddingConfig = getEmbeddingConfigSummary();
+    const embeddingValidation = validateEmbeddingConfig();
 
     return NextResponse.json({
       success: true,
       config: {
-        ...summary,
+        // LLM 配置
+        llm: {
+          provider: summary.provider,
+          model: summary.llmModel,
+          reasoningModel: summary.reasoningModel,
+          baseUrl: summary.baseUrl,
+          hasApiKey: summary.hasApiKey,
+        },
+        // Embedding 配置 (独立)
+        embedding: {
+          provider: embeddingConfig.provider,
+          model: embeddingConfig.model,
+          dimension: embeddingConfig.dimension,
+          baseUrl: embeddingConfig.baseUrl,
+          hasApiKey: embeddingConfig.hasApiKey,
+        },
+        // 已注册的动态模型
         registeredModels: registeredModels.map(m => ({
           id: m.id,
           type: m.type,
@@ -30,7 +55,17 @@ export async function GET() {
           createdAt: m.createdAt,
         })),
       },
-      validation,
+      validation: {
+        llm: {
+          valid: validation.valid,
+          errors: validation.errors.filter(e => !e.includes('EMBEDDING')),
+        },
+        embedding: embeddingValidation,
+        overall: {
+          valid: validation.valid && embeddingValidation.valid,
+          errors: [...validation.errors, ...embeddingValidation.errors],
+        },
+      },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -133,12 +168,21 @@ export async function POST(request: NextRequest) {
 
       case 'reload': {
         factory.reloadConfig();
+        reloadEmbeddingConfig();
+        
         const newSummary = getConfigSummary();
+        const newEmbeddingConfig = getEmbeddingConfigSummary();
         
         return NextResponse.json({
           success: true,
-          message: '配置已重新加载',
-          config: newSummary,
+          message: 'LLM 和 Embedding 配置已重新加载',
+          config: {
+            llm: {
+              provider: newSummary.provider,
+              model: newSummary.llmModel,
+            },
+            embedding: newEmbeddingConfig,
+          },
         });
       }
 

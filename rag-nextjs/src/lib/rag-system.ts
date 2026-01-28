@@ -10,6 +10,7 @@ import { readdir, readFile } from "fs/promises";
 import { existsSync } from "fs";
 import path from "path";
 import { createLLM, createEmbedding, getModelFactory, isOllamaProvider } from "./model-config";
+import { getEmbeddingProvider, getEmbeddingConfigSummary } from "./embedding-config";
 
 // 接口定义
 export interface TokenInfo {
@@ -551,6 +552,7 @@ export class LocalRAGSystem {
       /** @deprecated 使用 MODEL_PROVIDER 环境变量代替 */
       ollamaBaseUrl?: string;
       llmModel?: string;
+      /** @deprecated 使用 EMBEDDING_PROVIDER 环境变量代替 */
       embeddingModel?: string;
       onVectorizationProgress?: (progress: VectorizationProgress) => void;
       onRetrievalDetails?: (details: RetrievalDetails) => void;
@@ -561,16 +563,23 @@ export class LocalRAGSystem {
     const factory = getModelFactory();
     const envConfig = factory.getEnvConfig();
     
-    const {
-      llmModel = isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL,
-      embeddingModel = isOllamaProvider() ? envConfig.OLLAMA_EMBEDDING_MODEL : envConfig.OPENAI_EMBEDDING_MODEL,
-    } = config;
+    // LLM 模型 - 从 MODEL_PROVIDER 配置
+    const llmModel = config.llmModel || (isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL);
+    
+    // Embedding 模型 - 从 EMBEDDING_PROVIDER 独立配置
+    // 不再使用 isOllamaProvider()，而是使用独立的 embedding 配置系统
+    const embeddingConfig = getEmbeddingConfigSummary();
+    const embeddingProvider = getEmbeddingProvider();
 
     // 使用统一模型配置系统
     this.llm = createLLM(llmModel, { temperature: 0 });
-    this.embeddings = createEmbedding(embeddingModel);
+    
+    // Embedding 使用独立配置系统，如果没有指定 embeddingModel，则自动从 EMBEDDING_PROVIDER 获取
+    this.embeddings = createEmbedding(config.embeddingModel);
 
-    console.log(`[LocalRAGSystem] 初始化完成, 提供商: ${factory.getProvider()}, LLM: ${llmModel}, Embedding: ${embeddingModel}`);
+    console.log(`[LocalRAGSystem] 初始化完成:`);
+    console.log(`  - LLM 提供商: ${factory.getProvider()}, 模型: ${llmModel}`);
+    console.log(`  - Embedding 提供商: ${embeddingProvider}, 模型: ${embeddingConfig.model}`);
 
     this.observabilityEngine = new ObservabilityEngine({
       onTraceUpdate: config.onTraceUpdate,

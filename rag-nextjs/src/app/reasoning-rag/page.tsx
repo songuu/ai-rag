@@ -171,12 +171,14 @@ const ConfigPanel: React.FC<{
   availableModels: ModelInfo[];
   llmModels: ModelInfo[];
   embeddingModels: ModelInfo[];
+  embeddingProvider?: string;
+  isRemoteEmbedding?: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   errorMessage?: string | null;
   suggestion?: string | null;
   onRefresh?: () => void;
-}> = ({ config, onChange, availableModels, llmModels, embeddingModels, isExpanded, onToggle, errorMessage, suggestion, onRefresh }) => {
+}> = ({ config, onChange, availableModels, llmModels, embeddingModels, embeddingProvider = 'ollama', isRemoteEmbedding = false, isExpanded, onToggle, errorMessage, suggestion, onRefresh }) => {
   
   return (
     <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-purple-500/30 overflow-hidden">
@@ -279,10 +281,39 @@ const ConfigPanel: React.FC<{
           
           {/* 向量模型选择 */}
           <div>
-            <label className="text-sm font-medium text-emerald-300 mb-2 block">
-              🔮 向量模型
-            </label>
-            {embeddingModels.length === 0 ? (
+            <div className="flex items-center gap-2 mb-2">
+              <label className="text-sm font-medium text-emerald-300">
+                🔮 向量模型
+              </label>
+              {/* 提供商徽章 */}
+              <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                embeddingProvider === 'ollama' ? 'bg-gray-500/30 text-gray-300' :
+                embeddingProvider === 'siliconflow' ? 'bg-purple-500/30 text-purple-300' :
+                embeddingProvider === 'openai' ? 'bg-green-500/30 text-green-300' :
+                'bg-orange-500/30 text-orange-300'
+              }`}>
+                {embeddingProvider === 'ollama' ? 'Ollama' :
+                 embeddingProvider === 'siliconflow' ? 'SiliconFlow' :
+                 embeddingProvider === 'openai' ? 'OpenAI' :
+                 embeddingProvider}
+              </span>
+            </div>
+            {isRemoteEmbedding ? (
+              /* 远程提供商：显示只读配置信息 */
+              <div className="p-3 bg-slate-800/50 border border-emerald-500/30 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-white font-medium">{config.embeddingModel}</div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      通过环境变量配置 | {embeddingModels[0]?.dimension ? `${embeddingModels[0].dimension}D` : ''}
+                    </div>
+                  </div>
+                  <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="通过环境变量配置">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                </div>
+              </div>
+            ) : embeddingModels.length === 0 ? (
               <div className="p-2 bg-amber-900/20 border border-amber-500/20 rounded-lg text-xs text-amber-300">
                 未检测到向量模型，请安装: ollama pull nomic-embed-text
               </div>
@@ -514,6 +545,10 @@ export default function ReasoningRAGPage() {
   const [llmModels, setLlmModels] = useState<ModelInfo[]>([]);  // 快速模型列表
   const [embeddingModels, setEmbeddingModels] = useState<ModelInfo[]>([]);
   
+  // 模型提供商配置
+  const [embeddingProvider, setEmbeddingProvider] = useState<string>('ollama');
+  const isRemoteEmbedding = embeddingProvider !== 'ollama';
+  
   // 历史记录状态
   const [conversations, setConversations] = useState<ReasoningConversation[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
@@ -568,7 +603,28 @@ export default function ReasoningRAGPage() {
       setModelLoadError(null);
       setModelSuggestion(null);
       
-      // 并行加载推理模型和 embedding 模型
+      // 首先获取系统配置，确定 Embedding 提供商
+      const healthRes = await fetch('/api/health');
+      const healthData = await healthRes.json();
+      
+      if (healthData.modelConfig?.embedding) {
+        const embConfig = healthData.modelConfig.embedding;
+        setEmbeddingProvider(embConfig.provider || 'ollama');
+        
+        // 如果是远程 Embedding 提供商，使用配置的模型
+        if (embConfig.provider && embConfig.provider !== 'ollama') {
+          setEmbeddingModels([{
+            id: embConfig.model,
+            name: embConfig.model,
+            displayName: embConfig.model.split('/').pop() || embConfig.model,
+            dimension: embConfig.dimension,
+            sizeFormatted: `${embConfig.dimension}D`,
+          }]);
+          setConfig(prev => ({ ...prev, embeddingModel: embConfig.model }));
+        }
+      }
+      
+      // 并行加载推理模型和本地 Ollama 模型
       const [reasoningRes, ollamaRes] = await Promise.all([
         fetch('/api/reasoning-rag?action=models'),
         fetch('/api/ollama/models')
@@ -616,8 +672,8 @@ export default function ReasoningRAGPage() {
         }
       }
       
-      // 处理 embedding 模型
-      if (ollamaData.success && ollamaData.embeddingModels) {
+      // 处理 embedding 模型（仅 Ollama 提供商）
+      if (!isRemoteEmbedding && ollamaData.success && ollamaData.embeddingModels) {
         const embedModels = ollamaData.embeddingModels.map((m: { name: string; displayName?: string; sizeFormatted?: string; dimension?: number }) => ({
           id: m.name,
           name: m.name,
@@ -640,7 +696,7 @@ export default function ReasoningRAGPage() {
       setModelLoadError('无法连接到服务');
       setModelSuggestion('请确保 Ollama 服务正在运行');
     }
-  }, [config.reasoningModel, config.embeddingModel, config.fastModel]);
+  }, [config.reasoningModel, config.embeddingModel, config.fastModel, isRemoteEmbedding]);
   
   // 初始化加载
   useEffect(() => {
@@ -1123,6 +1179,8 @@ export default function ReasoningRAGPage() {
               availableModels={availableModels}
               llmModels={llmModels}
               embeddingModels={embeddingModels}
+              embeddingProvider={embeddingProvider}
+              isRemoteEmbedding={isRemoteEmbedding}
               isExpanded={configExpanded}
               onToggle={() => setConfigExpanded(!configExpanded)}
               errorMessage={modelLoadError}

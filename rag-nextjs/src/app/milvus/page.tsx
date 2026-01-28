@@ -58,13 +58,28 @@ const sourceIcons: Record<string, { icon: string; color: string; label: string }
   youtube: { icon: '📺', color: 'red', label: 'YouTube' },
 };
 
-// 推荐的 Embedding 模型
+// 推荐的 Embedding 模型（包含 Ollama 和 SiliconFlow）
 const RECOMMENDED_EMBEDDING_MODELS = [
+  // Ollama 本地模型
   { name: 'nomic-embed-text', description: '高质量通用嵌入', dimension: 768, size: '274 MB' },
   { name: 'bge-m3', description: 'BGE-M3 多语言', dimension: 1024, size: '2.2 GB' },
   { name: 'bge-large', description: 'BGE 中英双语', dimension: 1024, size: '1.3 GB' },
   { name: 'mxbai-embed-large', description: '大型高精度嵌入', dimension: 1024, size: '669 MB' },
   { name: 'snowflake-arctic-embed', description: 'Snowflake 嵌入', dimension: 1024, size: '669 MB' },
+  { name: 'qwen3-embedding', description: 'Qwen3 嵌入', dimension: 1024, size: '1.2 GB' },
+  // SiliconFlow 云端模型
+  { name: 'BAAI/bge-m3', description: 'SiliconFlow BGE-M3', dimension: 1024, size: '云端' },
+  { name: 'BAAI/bge-large-zh-v1.5', description: 'SiliconFlow BGE 中文', dimension: 1024, size: '云端' },
+  { name: 'BAAI/bge-large-en-v1.5', description: 'SiliconFlow BGE 英文', dimension: 1024, size: '云端' },
+  { name: 'Pro/BAAI/bge-m3', description: 'SiliconFlow BGE-M3 Pro', dimension: 1024, size: '云端' },
+  { name: 'Qwen/Qwen3-Embedding-8B', description: 'SiliconFlow Qwen3 8B', dimension: 4096, size: '云端' },
+  { name: 'Qwen/Qwen3-Embedding-4B', description: 'SiliconFlow Qwen3 4B', dimension: 2560, size: '云端' },
+  { name: 'Qwen/Qwen3-Embedding-0.6B', description: 'SiliconFlow Qwen3 0.6B', dimension: 1024, size: '云端' },
+  { name: 'netease-youdao/bce-embedding-base_v1', description: 'SiliconFlow 网易有道', dimension: 768, size: '云端' },
+  // OpenAI 模型
+  { name: 'text-embedding-3-small', description: 'OpenAI Small', dimension: 1536, size: '云端' },
+  { name: 'text-embedding-3-large', description: 'OpenAI Large', dimension: 3072, size: '云端' },
+  { name: 'text-embedding-ada-002', description: 'OpenAI Ada', dimension: 1536, size: '云端' },
 ];
 
 export default function MilvusPage() {
@@ -81,6 +96,11 @@ export default function MilvusPage() {
   const [embeddingModels, setEmbeddingModels] = useState<OllamaModel[]>([]);
   const [selectedEmbeddingModel, setSelectedEmbeddingModel] = useState('nomic-embed-text');
   const [loadingModels, setLoadingModels] = useState(false);
+  
+  // 模型提供商配置
+  const [embeddingProvider, setEmbeddingProvider] = useState<string>('ollama');
+  const [embeddingDimension, setEmbeddingDimension] = useState<number>(768);
+  const isRemoteEmbedding = embeddingProvider !== 'ollama';
 
   // 搜索
   const [searchQuery, setSearchQuery] = useState('');
@@ -133,10 +153,33 @@ export default function MilvusPage() {
     setTimeout(() => setNotification(null), 5000);
   };
 
-  // 加载 Ollama 模型
+  // 加载模型配置（先检查系统配置，再加载 Ollama 模型）
   const loadOllamaModels = useCallback(async () => {
     setLoadingModels(true);
     try {
+      // 首先获取系统配置，确定使用哪个提供商
+      const healthResponse = await fetch('/api/health');
+      const healthData = await healthResponse.json();
+      
+      if (healthData.modelConfig?.embedding) {
+        const embConfig = healthData.modelConfig.embedding;
+        setEmbeddingProvider(embConfig.provider || 'ollama');
+        setEmbeddingDimension(embConfig.dimension || 768);
+        
+        // 如果是远程提供商，直接使用配置的模型
+        if (embConfig.provider && embConfig.provider !== 'ollama') {
+          setSelectedEmbeddingModel(embConfig.model);
+          setEmbeddingModels([{
+            name: embConfig.model,
+            size: 0,
+            modified_at: new Date().toISOString(),
+          }]);
+          setLoadingModels(false);
+          return;
+        }
+      }
+      
+      // Ollama 提供商：从本地加载模型列表
       const response = await fetch('/api/ollama/models');
       const data = await response.json();
 
@@ -245,18 +288,25 @@ export default function MilvusPage() {
     }
   };
 
-  // 获取选定模型的维度（支持带 :latest 后缀的模型名）
+  // 获取选定模型的维度（支持 Ollama、SiliconFlow、OpenAI 模型）
   const getModelDimension = (modelName: string): number => {
-    // 移除 :latest 或其他标签后缀
-    const baseName = modelName.split(':')[0].toLowerCase().trim();
-
-    console.log(`[getModelDimension] Input: "${modelName}", BaseName: "${baseName}"`);
-
-    // 首先精确匹配推荐模型列表
-    const exactMatch = RECOMMENDED_EMBEDDING_MODELS.find(m => m.name.toLowerCase() === baseName);
+    // 首先精确匹配（支持 SiliconFlow 的 BAAI/bge-m3 格式）
+    const exactMatch = RECOMMENDED_EMBEDDING_MODELS.find(m => 
+      m.name === modelName || m.name.toLowerCase() === modelName.toLowerCase()
+    );
     if (exactMatch) {
-      console.log(`[getModelDimension] Exact match found: ${exactMatch.name} → ${exactMatch.dimension}D`);
       return exactMatch.dimension;
+    }
+    
+    // 移除 :latest 或其他标签后缀进行匹配
+    const baseName = modelName.split(':')[0].toLowerCase().trim();
+    
+    // 精确匹配去掉标签的名称
+    const baseMatch = RECOMMENDED_EMBEDDING_MODELS.find(m => 
+      m.name.toLowerCase() === baseName
+    );
+    if (baseMatch) {
+      return baseMatch.dimension;
     }
 
     // 模糊匹配推荐模型列表
@@ -265,36 +315,41 @@ export default function MilvusPage() {
       m.name.toLowerCase().includes(baseName)
     );
     if (fuzzyMatch) {
-      console.log(`[getModelDimension] Fuzzy match found: ${fuzzyMatch.name} → ${fuzzyMatch.dimension}D`);
       return fuzzyMatch.dimension;
     }
 
     // 根据模型名称模式推断维度（按优先级排序）
-    if (baseName.includes('bge-m3')) {
-      console.log(`[getModelDimension] Pattern match: bge-m3 → 1024D`);
-      return 1024;
-    }
-    if (baseName.includes('bge') && (baseName.includes('large') || baseName.includes('base'))) {
-      console.log(`[getModelDimension] Pattern match: bge-large/base → 1024D`);
-      return 1024;
-    }
-    if (baseName.includes('nomic') || baseName.includes('embed-text')) {
-      console.log(`[getModelDimension] Pattern match: nomic → 768D`);
-      return 768;
-    }
-    if (baseName.includes('mxbai') || baseName.includes('snowflake')) {
-      console.log(`[getModelDimension] Pattern match: mxbai/snowflake → 1024D`);
-      return 1024;
-    }
-    if (baseName.includes('e5-large') || baseName.includes('gte-large')) {
-      console.log(`[getModelDimension] Pattern match: e5/gte-large → 1024D`);
-      return 1024;
-    }
+    // SiliconFlow Qwen3 系列
+    if (baseName.includes('qwen3-embedding-8b')) return 4096;
+    if (baseName.includes('qwen3-embedding-4b')) return 2560;
+    if (baseName.includes('qwen3-embedding')) return 1024;
+    
+    // BGE 系列
+    if (baseName.includes('bge-m3') || baseName.includes('baai/bge-m3')) return 1024;
+    if (baseName.includes('bge') && (baseName.includes('large') || baseName.includes('base'))) return 1024;
+    
+    // OpenAI 系列
+    if (baseName.includes('text-embedding-3-large')) return 3072;
+    if (baseName.includes('text-embedding-3-small') || baseName.includes('ada-002')) return 1536;
+    
+    // 其他常见模型
+    if (baseName.includes('nomic') || baseName.includes('embed-text')) return 768;
+    if (baseName.includes('mxbai') || baseName.includes('snowflake')) return 1024;
+    if (baseName.includes('e5-large') || baseName.includes('gte-large')) return 1024;
+    if (baseName.includes('bce-embedding')) return 768;
 
-    // 默认返回 768（最常见的维度）
-    console.warn(`[getModelDimension] No match found for "${baseName}", defaulting to 768D`);
+    // 默认返回 768
+    console.warn(`[getModelDimension] No match found for "${modelName}", defaulting to 768D`);
     return 768;
   };
+
+  // 获取当前选中模型的维度（支持远程提供商）
+  const getCurrentModelDimension = useCallback(() => {
+    if (isRemoteEmbedding) {
+      return embeddingDimension;
+    }
+    return getModelDimension(selectedEmbeddingModel);
+  }, [isRemoteEmbedding, embeddingDimension, selectedEmbeddingModel]);
 
   // 检查维度是否匹配
   const isDimensionMismatch = useMemo(() => {
@@ -302,11 +357,11 @@ export default function MilvusPage() {
       console.log('[isDimensionMismatch] No stats or embeddingDimension, returning false');
       return false;
     }
-    const selectedDimension = getModelDimension(selectedEmbeddingModel);
+    const selectedDimension = getCurrentModelDimension();
     const mismatch = stats.embeddingDimension !== selectedDimension;
-    console.log(`[isDimensionMismatch] Collection: ${stats.embeddingDimension}D, Selected model (${selectedEmbeddingModel}): ${selectedDimension}D, Mismatch: ${mismatch}`);
+    console.log(`[isDimensionMismatch] Collection: ${stats.embeddingDimension}D, Selected model (${selectedEmbeddingModel}): ${selectedDimension}D, Mismatch: ${mismatch}, Provider: ${embeddingProvider}`);
     return mismatch;
-  }, [stats?.embeddingDimension, selectedEmbeddingModel]);
+  }, [stats?.embeddingDimension, selectedEmbeddingModel, getCurrentModelDimension, embeddingProvider]);
 
   // 搜索
   const handleSearch = async () => {
@@ -317,7 +372,7 @@ export default function MilvusPage() {
 
     // 维度不匹配警告
     if (isDimensionMismatch && stats?.rowCount && stats.rowCount > 0) {
-      const selectedDimension = getModelDimension(selectedEmbeddingModel);
+      const selectedDimension = getCurrentModelDimension();
       showNotification('error', `⚠️ 维度不匹配! 集合: ${stats.embeddingDimension}维, 模型: ${selectedDimension}维。请选择正确的模型或清空集合后重新导入。`);
       return;
     }
@@ -663,41 +718,64 @@ export default function MilvusPage() {
               {/* Embedding 模型选择 */}
               <div className="flex items-center gap-2">
                 <span className="text-gray-400 text-sm">嵌入模型:</span>
-                <select
-                  value={selectedEmbeddingModel}
-                  onChange={(e) => {
-                    console.log(`[Model Change] From: "${selectedEmbeddingModel}" To: "${e.target.value}"`);
-                    setSelectedEmbeddingModel(e.target.value);
-                  }}
-                  className={`px-3 py-1.5 bg-black/30 border rounded-lg text-white text-sm focus:outline-none ${isDimensionMismatch && stats?.rowCount && stats.rowCount > 0
-                    ? 'border-red-500/50 focus:border-red-500'
-                    : 'border-white/20 focus:border-purple-500'
-                    }`}
-                >
-                  {embeddingModels.length > 0 ? (
-                    embeddingModels.map(model => {
-                      const dimension = getModelDimension(model.name);
-                      return (
+                {/* 提供商徽章 */}
+                <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                  embeddingProvider === 'ollama' ? 'bg-gray-500/30 text-gray-300' :
+                  embeddingProvider === 'siliconflow' ? 'bg-purple-500/30 text-purple-300' :
+                  embeddingProvider === 'openai' ? 'bg-green-500/30 text-green-300' :
+                  'bg-orange-500/30 text-orange-300'
+                }`}>
+                  {embeddingProvider === 'ollama' ? 'Ollama' :
+                   embeddingProvider === 'siliconflow' ? 'SiliconFlow' :
+                   embeddingProvider === 'openai' ? 'OpenAI' :
+                   embeddingProvider.charAt(0).toUpperCase() + embeddingProvider.slice(1)}
+                </span>
+                {isRemoteEmbedding ? (
+                  /* 远程提供商：显示只读模型名称 */
+                  <div className="px-3 py-1.5 bg-black/30 border border-white/20 rounded-lg text-white text-sm flex items-center gap-2">
+                    <span>{selectedEmbeddingModel}</span>
+                    <svg className="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="通过环境变量配置">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                  </div>
+                ) : (
+                  /* Ollama 提供商：可选择的下拉框 */
+                  <select
+                    value={selectedEmbeddingModel}
+                    onChange={(e) => {
+                      console.log(`[Model Change] From: "${selectedEmbeddingModel}" To: "${e.target.value}"`);
+                      setSelectedEmbeddingModel(e.target.value);
+                    }}
+                    className={`px-3 py-1.5 bg-black/30 border rounded-lg text-white text-sm focus:outline-none ${isDimensionMismatch && stats?.rowCount && stats.rowCount > 0
+                      ? 'border-red-500/50 focus:border-red-500'
+                      : 'border-white/20 focus:border-purple-500'
+                      }`}
+                  >
+                    {embeddingModels.length > 0 ? (
+                      embeddingModels.map(model => {
+                        const dimension = getModelDimension(model.name);
+                        return (
+                          <option key={model.name} value={model.name}>
+                            {model.name} ({dimension}D)
+                          </option>
+                        );
+                      })
+                    ) : (
+                      RECOMMENDED_EMBEDDING_MODELS.map(model => (
                         <option key={model.name} value={model.name}>
-                          {model.name} ({dimension}D)
+                          {model.name} ({model.dimension}D)
                         </option>
-                      );
-                    })
-                  ) : (
-                    RECOMMENDED_EMBEDDING_MODELS.map(model => (
-                      <option key={model.name} value={model.name}>
-                        {model.name} ({model.dimension}D)
-                      </option>
-                    ))
-                  )}
-                </select>
+                      ))
+                    )}
+                  </select>
+                )}
                 {/* 显示选中模型的维度 */}
                 <div className={`px-2 py-1 rounded text-xs font-mono ${
                   isDimensionMismatch && stats?.rowCount && stats.rowCount > 0
                     ? 'bg-red-500/20 text-red-400 border border-red-500/30'
                     : 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
                 }`}>
-                  {getModelDimension(selectedEmbeddingModel)}D
+                  {isRemoteEmbedding ? embeddingDimension : getModelDimension(selectedEmbeddingModel)}D
                 </div>
                 {/* 显示集合维度 */}
                 {stats?.embeddingDimension && (
@@ -706,7 +784,7 @@ export default function MilvusPage() {
                   </div>
                 )}
                 {isDimensionMismatch && stats && stats?.rowCount > 0 && (
-                  <span className="text-xs text-red-400 flex items-center gap-1 font-medium" title={`集合: ${stats.embeddingDimension}D, 模型: ${getModelDimension(selectedEmbeddingModel)}D`}>
+                  <span className="text-xs text-red-400 flex items-center gap-1 font-medium" title={`集合: ${stats.embeddingDimension}D, 模型: ${getCurrentModelDimension()}D`}>
                     ⚠️ 不匹配
                   </span>
                 )}
@@ -887,26 +965,32 @@ export default function MilvusPage() {
                   <div className="text-red-400 font-bold text-lg mb-1">向量维度不匹配</div>
                   <div className="text-red-300/80 text-sm">
                     集合中的文档使用 <span className="font-bold">{stats.embeddingDimension}</span> 维向量，
-                    但当前选择的模型 <span className="font-bold">{selectedEmbeddingModel}</span> 生成 <span className="font-bold">{getModelDimension(selectedEmbeddingModel)}</span> 维向量。
+                    但当前选择的模型 <span className="font-bold">{selectedEmbeddingModel}</span> 生成 <span className="font-bold">{getCurrentModelDimension()}</span> 维向量。
                   </div>
                   <div className="text-gray-400 text-xs mt-2">
-                    解决方案：1) 选择 {stats.embeddingDimension === 768 ? 'nomic-embed-text' : 'mxbai-embed-large 或 bge-large'} 模型
-                    2) 或清空集合后使用新模型重新导入文档
+                    {isRemoteEmbedding ? (
+                      <>解决方案：修改环境变量配置使用正确维度的模型，或清空集合后重新导入文档</>
+                    ) : (
+                      <>解决方案：1) 选择 {stats.embeddingDimension === 768 ? 'nomic-embed-text' : 'mxbai-embed-large 或 bge-large'} 模型
+                      2) 或清空集合后使用新模型重新导入文档</>
+                    )}
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <button
-                    onClick={() => {
-                      const recommendedModel = stats.embeddingDimension === 768 ? 'nomic-embed-text' : 'mxbai-embed-large';
-                      if (embeddingModels.some(m => m.name === recommendedModel) || RECOMMENDED_EMBEDDING_MODELS.some(m => m.name === recommendedModel)) {
-                        setSelectedEmbeddingModel(recommendedModel);
-                        showNotification('success', `已切换到 ${recommendedModel}`);
-                      }
-                    }}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-all"
-                  >
-                    使用匹配模型
-                  </button>
+                  {!isRemoteEmbedding && (
+                    <button
+                      onClick={() => {
+                        const recommendedModel = stats.embeddingDimension === 768 ? 'nomic-embed-text' : 'mxbai-embed-large';
+                        if (embeddingModels.some(m => m.name === recommendedModel) || RECOMMENDED_EMBEDDING_MODELS.some(m => m.name === recommendedModel)) {
+                          setSelectedEmbeddingModel(recommendedModel);
+                          showNotification('success', `已切换到 ${recommendedModel}`);
+                        }
+                      }}
+                      className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-medium rounded-lg transition-all"
+                    >
+                      使用匹配模型
+                    </button>
+                  )}
                   <button
                     onClick={handleClear}
                     className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-all"

@@ -83,6 +83,10 @@ export default function HomePage() {
   const [threshold, setThreshold] = useState(0.0);
   const [llmModel, setLlmModel] = useState('llama3.1');
   const [embeddingModel, setEmbeddingModel] = useState('nomic-embed-text');
+  const [modelConfig, setModelConfig] = useState<{
+    llm: { provider: string; model: string };
+    embedding: { provider: string; model: string; dimension: number };
+  } | undefined>(undefined);
   const [queryAnalysis, setQueryAnalysis] = useState<any>(null);
   const [showParams, setShowParams] = useState(true);
   const [showQueryAnalysis, setShowQueryAnalysis] = useState(false);
@@ -209,6 +213,18 @@ export default function HomePage() {
         setEmbeddingDim(data.ragSystem?.embeddingDimension || 0);
       } else {
         setSystemStatus('错误');
+      }
+      
+      // 更新实际的模型配置（无论成功与否都更新，因为 API 总是返回配置）
+      if (data.modelConfig) {
+        setLlmModel(data.modelConfig.llm?.model || 'llama3.1');
+        setEmbeddingModel(data.modelConfig.embedding?.model || 'nomic-embed-text');
+        // 保存完整的 modelConfig 用于 SystemInfo 组件
+        setModelConfig(data.modelConfig);
+        // 如果有嵌入维度信息，也更新
+        if (data.modelConfig.embedding?.dimension) {
+          setEmbeddingDim(data.modelConfig.embedding.dimension);
+        }
       }
     } catch (error) {
       setSystemStatus('错误');
@@ -1712,6 +1728,7 @@ export default function HomePage() {
               systemStatus={systemStatus}
               llmModel={llmModel}
               embeddingModel={embeddingModel}
+              modelConfig={modelConfig}
               onReinitialize={handleReinitialize}
               onModelChange={handleModelChange}
             />

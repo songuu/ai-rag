@@ -17,6 +17,7 @@ import { MilvusVectorStore, getMilvusInstance, MilvusConfig, MilvusSearchResult 
 import { ObservabilityEngine, type Trace } from "./observability";
 import { v4 as uuidv4 } from 'uuid';
 import { createLLM, createEmbedding, getModelFactory, isOllamaProvider } from "./model-config";
+import { getEmbeddingProvider, getEmbeddingConfigSummary } from "./embedding-config";
 
 // 存储后端类型
 export type StorageBackend = 'memory' | 'milvus';
@@ -62,10 +63,15 @@ export class MilvusRAGSystem {
     const factory = getModelFactory();
     const envConfig = factory.getEnvConfig();
     
+    // Embedding 使用独立配置系统
+    const embeddingConfig = getEmbeddingConfigSummary();
+    const embeddingProvider = getEmbeddingProvider();
+    
     this.config = {
       ollamaBaseUrl: config.ollamaBaseUrl || envConfig.OLLAMA_BASE_URL,
       llmModel: config.llmModel || (isOllamaProvider() ? envConfig.OLLAMA_LLM_MODEL : envConfig.OPENAI_LLM_MODEL),
-      embeddingModel: config.embeddingModel || (isOllamaProvider() ? envConfig.OLLAMA_EMBEDDING_MODEL : envConfig.OPENAI_EMBEDDING_MODEL),
+      // 使用独立的 embedding 配置，不再依赖 isOllamaProvider()
+      embeddingModel: config.embeddingModel || embeddingConfig.model,
       storageBackend: config.storageBackend || "milvus",
       milvusConfig: config.milvusConfig || {},
       onTraceUpdate: config.onTraceUpdate || (() => {}),
@@ -73,9 +79,12 @@ export class MilvusRAGSystem {
 
     // 使用统一模型配置系统
     this.llm = createLLM(this.config.llmModel, { temperature: 0 });
-    this.embeddings = createEmbedding(this.config.embeddingModel);
+    // Embedding 使用独立配置系统
+    this.embeddings = createEmbedding(config.embeddingModel);
 
-    console.log(`[MilvusRAGSystem] 初始化完成, 提供商: ${factory.getProvider()}, LLM: ${this.config.llmModel}, Embedding: ${this.config.embeddingModel}`);
+    console.log(`[MilvusRAGSystem] 初始化完成:`);
+    console.log(`  - LLM 提供商: ${factory.getProvider()}, 模型: ${this.config.llmModel}`);
+    console.log(`  - Embedding 提供商: ${embeddingProvider}, 模型: ${embeddingConfig.model}`);
 
     this.observabilityEngine = new ObservabilityEngine({
       onTraceUpdate: this.config.onTraceUpdate,

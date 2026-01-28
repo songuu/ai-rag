@@ -47,6 +47,7 @@ import {
   getModelFactory,
   isOllamaProvider,
 } from './model-config';
+import { getEmbeddingConfigSummary } from './embedding-config';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -146,20 +147,24 @@ export interface ContextManagerConfig {
 
 /**
  * 获取默认配置，使用统一模型配置系统
+ * - LLM 使用 MODEL_PROVIDER
+ * - Embedding 使用 EMBEDDING_PROVIDER (独立配置)
  */
 function getDefaultConfig(): ContextManagerConfig {
   const factory = getModelFactory();
   const envConfig = factory.getEnvConfig();
   const provider = factory.getProvider();
   
+  // Embedding 使用独立配置
+  const embeddingConfig = getEmbeddingConfigSummary();
+  
   return {
-    // 根据提供商选择默认模型
+    // LLM 根据 MODEL_PROVIDER 选择
     llmModel: provider === 'ollama' 
       ? envConfig.OLLAMA_LLM_MODEL 
       : envConfig.OPENAI_LLM_MODEL,
-    embeddingModel: provider === 'ollama'
-      ? envConfig.OLLAMA_EMBEDDING_MODEL
-      : envConfig.OPENAI_EMBEDDING_MODEL,
+    // Embedding 使用独立的 EMBEDDING_PROVIDER 配置
+    embeddingModel: embeddingConfig.model,
     milvusCollection: process.env.MILVUS_COLLECTION || 'rag_documents',
     windowConfig: {
       strategy: 'hybrid',

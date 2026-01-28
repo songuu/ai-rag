@@ -5,13 +5,32 @@
 创建 `.env.local` 文件并配置以下环境变量：
 
 ```bash
-# 模型提供商选择 (必填)
+# LLM 模型提供商选择
 MODEL_PROVIDER=ollama  # 可选: ollama | openai | azure | custom
+
+# Embedding 模型提供商选择 (独立于 LLM)
+EMBEDDING_PROVIDER=siliconflow  # 可选: ollama | siliconflow | openai | custom
 ```
 
-## 主开关
+## 架构说明
 
-`MODEL_PROVIDER` 环境变量控制系统使用本地 Ollama 还是生产 API：
+本系统支持 **LLM 与 Embedding 完全解耦**：
+
+| 模块 | 环境变量 | 说明 |
+|------|----------|------|
+| LLM 模型 | `MODEL_PROVIDER` | 控制对话/生成模型 |
+| Embedding 模型 | `EMBEDDING_PROVIDER` | 控制向量嵌入模型 |
+
+这意味着你可以：
+- LLM 用本地 Ollama，Embedding 用云端 SiliconFlow
+- LLM 用 OpenAI，Embedding 用 SiliconFlow (省钱)
+- 或任意组合
+
+## LLM 提供商配置
+
+### 主开关
+
+`MODEL_PROVIDER` 环境变量控制 LLM 模型提供商：
 
 | 值 | 说明 |
 |---|---|
@@ -20,7 +39,7 @@ MODEL_PROVIDER=ollama  # 可选: ollama | openai | azure | custom
 | `azure` | 使用 Azure OpenAI 服务 |
 | `custom` | 使用自定义 OpenAI 兼容 API (如 DeepSeek, 智谱等) |
 
-## Ollama 配置 (本地模式)
+### Ollama 配置 (本地模式)
 
 当 `MODEL_PROVIDER=ollama` 时使用：
 
@@ -32,16 +51,12 @@ OLLAMA_BASE_URL=http://localhost:11434
 # 推荐: llama3.1, qwen2.5, glm-4
 OLLAMA_LLM_MODEL=llama3.1
 
-# Embedding 模型 (向量嵌入)
-# 推荐: nomic-embed-text (768维), bge-m3 (1024维)
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-
 # 推理模型 (复杂推理任务)
 # 推荐: deepseek-r1, qwen3
 OLLAMA_REASONING_MODEL=deepseek-r1
 ```
 
-## OpenAI 配置
+### OpenAI 配置
 
 当 `MODEL_PROVIDER=openai` 时使用：
 
@@ -55,14 +70,11 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 # LLM 模型
 OPENAI_LLM_MODEL=gpt-4o-mini
 
-# Embedding 模型
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-
 # 推理模型
 OPENAI_REASONING_MODEL=gpt-4o
 ```
 
-## Azure OpenAI 配置
+### Azure OpenAI 配置
 
 当 `MODEL_PROVIDER=azure` 时使用：
 
@@ -75,10 +87,9 @@ AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com
 
 # 部署名称
 AZURE_OPENAI_LLM_DEPLOYMENT=gpt-4o-mini
-AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-ada-002
 ```
 
-## 自定义 API 配置
+### 自定义 API 配置
 
 当 `MODEL_PROVIDER=custom` 时使用，支持 OpenAI 兼容的第三方 API：
 
@@ -94,8 +105,117 @@ CUSTOM_BASE_URL=https://api.deepseek.com
 
 # 模型名称
 CUSTOM_LLM_MODEL=deepseek-chat
-CUSTOM_EMBEDDING_MODEL=
 ```
+
+---
+
+## Embedding 提供商配置 (独立)
+
+### 主开关
+
+`EMBEDDING_PROVIDER` 环境变量**独立控制** Embedding 模型提供商：
+
+| 值 | 说明 |
+|---|---|
+| `ollama` | 使用本地 Ollama Embedding 模型 |
+| `siliconflow` | 使用硅基流动 (SiliconFlow) 云服务 ⭐ **推荐** |
+| `openai` | 使用 OpenAI Embedding API |
+| `custom` | 使用自定义 OpenAI 兼容 API |
+
+### SiliconFlow 配置 (推荐) ⭐
+
+[SiliconFlow (硅基流动)](https://cloud.siliconflow.cn) 提供高性价比的 Embedding 服务，新用户注册送 2000 万 Tokens。
+
+当 `EMBEDDING_PROVIDER=siliconflow` 时使用：
+
+```bash
+# SiliconFlow API Key (必填)
+# 获取地址: https://cloud.siliconflow.cn/account/ak
+SILICONFLOW_API_KEY=sk-xxxxx
+
+# API 基础地址 (可选，使用默认即可)
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn/v1
+
+# Embedding 模型选择
+# 推荐: BAAI/bge-m3 (1024维, 8192 tokens)
+# 更多模型: https://cloud.siliconflow.cn/me/models?types=embedding
+SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
+```
+
+**SiliconFlow 支持的 Embedding 模型：**
+
+| 模型 | 维度 | 最大 Tokens | 说明 |
+|------|------|-------------|------|
+| `BAAI/bge-large-zh-v1.5` | 1024 | 512 | 中文优化 |
+| `BAAI/bge-large-en-v1.5` | 1024 | 512 | 英文优化 |
+| `BAAI/bge-m3` | 1024 | 8192 | 多语言，长文本 ⭐ |
+| `Pro/BAAI/bge-m3` | 1024 | 8192 | Pro 版本 |
+| `Qwen/Qwen3-Embedding-8B` | 4096 | 32768 | 最强精度 |
+| `Qwen/Qwen3-Embedding-4B` | 2560 | 32768 | 平衡选择 |
+| `Qwen/Qwen3-Embedding-0.6B` | 1024 | 32768 | 轻量快速 |
+| `netease-youdao/bce-embedding-base_v1` | 768 | 512 | 网易有道 |
+
+### Ollama Embedding 配置
+
+当 `EMBEDDING_PROVIDER=ollama` 时使用：
+
+```bash
+# Ollama 服务地址
+OLLAMA_BASE_URL=http://localhost:11434
+
+# Embedding 模型
+# 推荐: nomic-embed-text (768维), bge-m3 (1024维)
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+```
+
+**Ollama 支持的 Embedding 模型：**
+
+| 模型 | 维度 | 说明 |
+|------|------|------|
+| `nomic-embed-text` | 768 | 默认推荐 |
+| `bge-m3` | 1024 | 多语言 |
+| `bge-large` | 1024 | BGE 系列 |
+| `all-minilm` | 384 | 轻量 |
+| `mxbai-embed-large` | 1024 | 高质量 |
+| `qwen3-embedding` | 1024 | Qwen3 系列 |
+
+### OpenAI Embedding 配置
+
+当 `EMBEDDING_PROVIDER=openai` 时使用：
+
+```bash
+# API Key (必填)
+OPENAI_API_KEY=sk-xxxxx
+
+# API 基础地址 (可选)
+OPENAI_BASE_URL=
+
+# Embedding 模型
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
+```
+
+### 自定义 Embedding API 配置
+
+当 `EMBEDDING_PROVIDER=custom` 时使用：
+
+```bash
+# API Key (必填)
+CUSTOM_EMBEDDING_API_KEY=sk-xxxxx
+
+# API 基础地址 (必填)
+CUSTOM_EMBEDDING_BASE_URL=https://api.example.com/v1
+
+# 模型名称
+CUSTOM_EMBEDDING_MODEL=custom-embedding
+
+# 向量维度 (必填 - 自定义模型需要显式指定)
+# 因为系统无法自动识别自定义模型的维度
+CUSTOM_EMBEDDING_DIMENSION=1024
+```
+
+> ⚠️ **重要**: 使用自定义 Embedding API 时，**必须**设置 `CUSTOM_EMBEDDING_DIMENSION`，否则系统将使用默认值 768，可能导致维度不匹配错误。
+
+---
 
 ## Milvus 配置
 
@@ -155,7 +275,7 @@ MILVUS_DEFAULT_DATABASE=default
 MILVUS_DEFAULT_COLLECTION=rag_documents
 
 # 默认向量维度
-MILVUS_DEFAULT_DIMENSION=768
+MILVUS_DEFAULT_DIMENSION=1024
 
 # 默认索引类型
 MILVUS_DEFAULT_INDEX_TYPE=IVF_FLAT
@@ -164,97 +284,129 @@ MILVUS_DEFAULT_INDEX_TYPE=IVF_FLAT
 MILVUS_DEFAULT_METRIC_TYPE=COSINE
 ```
 
+---
+
 ## 完整配置示例
 
-### 示例 1: 本地开发 (Ollama + 本地 Milvus)
+### 示例 1: 本地开发 (全本地)
 
 ```bash
-# 模型配置
+# LLM 配置 - 使用本地 Ollama
 MODEL_PROVIDER=ollama
 OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_LLM_MODEL=llama3.1
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
 OLLAMA_REASONING_MODEL=deepseek-r1
 
-# Milvus 配置
+# Embedding 配置 - 使用本地 Ollama
+EMBEDDING_PROVIDER=ollama
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text
+
+# Milvus 配置 - 本地
 MILVUS_PROVIDER=local
 MILVUS_LOCAL_ADDRESS=localhost:19530
+MILVUS_DEFAULT_DIMENSION=768
 ```
 
-### 示例 2: 生产环境 (OpenAI + Zilliz Cloud)
+### 示例 2: 混合模式 (本地 LLM + 云端 Embedding) ⭐ 推荐
 
 ```bash
-# 模型配置
+# LLM 配置 - 使用本地 Ollama (省钱)
+MODEL_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_LLM_MODEL=llama3.1
+OLLAMA_REASONING_MODEL=deepseek-r1
+
+# Embedding 配置 - 使用 SiliconFlow (高质量)
+EMBEDDING_PROVIDER=siliconflow
+SILICONFLOW_API_KEY=sk-xxxxx
+SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
+
+# Milvus 配置 - Zilliz Cloud
+MILVUS_PROVIDER=zilliz
+MILVUS_ZILLIZ_ENDPOINT=in01-xxx.api.gcp-us-west1.zillizcloud.com:443
+MILVUS_ZILLIZ_TOKEN=xxxxx
+MILVUS_DEFAULT_DIMENSION=1024  # 匹配 bge-m3 维度
+```
+
+### 示例 3: 生产环境 (全云端)
+
+```bash
+# LLM 配置 - 使用 OpenAI
 MODEL_PROVIDER=openai
 OPENAI_API_KEY=sk-xxxxx
 OPENAI_LLM_MODEL=gpt-4o-mini
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 OPENAI_REASONING_MODEL=gpt-4o
 
-# Milvus 配置 - 使用 Zilliz Cloud
+# Embedding 配置 - 使用 SiliconFlow (省钱)
+EMBEDDING_PROVIDER=siliconflow
+SILICONFLOW_API_KEY=sk-xxxxx
+SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
+
+# Milvus 配置 - Zilliz Cloud
 MILVUS_PROVIDER=zilliz
-MILVUS_ZILLIZ_ENDPOINT=https://in01-xxx.aws-us-west-2.vectordb.zillizcloud.com:19530
+MILVUS_ZILLIZ_ENDPOINT=in01-xxx.aws-us-west-2.vectordb.zillizcloud.com:443
 MILVUS_ZILLIZ_TOKEN=xxxxx
-MILVUS_DEFAULT_DIMENSION=1536  # OpenAI embedding 维度
+MILVUS_DEFAULT_DIMENSION=1024
 ```
 
-### 示例 3: 使用 DeepSeek API
+### 示例 4: 使用 DeepSeek API + SiliconFlow
 
 ```bash
+# LLM 配置 - 使用 DeepSeek
 MODEL_PROVIDER=custom
 CUSTOM_API_KEY=sk-xxxxx
 CUSTOM_BASE_URL=https://api.deepseek.com
 CUSTOM_LLM_MODEL=deepseek-chat
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text  # DeepSeek 不提供 Embedding，仍用 Ollama
+
+# Embedding 配置 - 使用 SiliconFlow
+EMBEDDING_PROVIDER=siliconflow
+SILICONFLOW_API_KEY=sk-xxxxx
+SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
 
 # Milvus 配置
 MILVUS_PROVIDER=local
 MILVUS_LOCAL_ADDRESS=localhost:19530
+MILVUS_DEFAULT_DIMENSION=1024
 ```
 
-### 示例 4: 混合模式 (本地 Ollama + Zilliz Cloud)
-
-```bash
-# 模型配置 - 使用本地 Ollama
-MODEL_PROVIDER=ollama
-OLLAMA_LLM_MODEL=llama3.1
-OLLAMA_EMBEDDING_MODEL=nomic-embed-text
-
-# Milvus 配置 - 使用云端 Zilliz
-MILVUS_PROVIDER=zilliz
-MILVUS_ZILLIZ_ENDPOINT=https://in01-xxx.vectordb.zillizcloud.com:19530
-MILVUS_ZILLIZ_TOKEN=xxxxx
-```
-
-## 模型维度参考
-
-| 模型 | 维度 | 提供商 |
-|------|------|--------|
-| nomic-embed-text | 768 | Ollama |
-| bge-m3 | 1024 | Ollama |
-| all-minilm | 384 | Ollama |
-| qwen3-embedding | 1024 | Ollama |
-| text-embedding-3-small | 1536 | OpenAI |
-| text-embedding-3-large | 3072 | OpenAI |
-| text-embedding-ada-002 | 1536 | OpenAI |
+---
 
 ## API 使用
 
 ### 获取当前配置
 
 ```typescript
-import { getModelFactory, getConfigSummary } from '@/lib/model-config';
+import { getConfigSummary } from '@/lib/model-config';
+import { getEmbeddingConfigSummary } from '@/lib/embedding-config';
 
-// 获取配置摘要
-const summary = getConfigSummary();
-console.log(summary);
-// { provider: 'ollama', llmModel: 'llama3.1', ... }
+// 获取 LLM 配置摘要
+const llmSummary = getConfigSummary();
+console.log(llmSummary);
+// {
+//   provider: 'ollama',
+//   llmModel: 'llama3.1',
+//   embeddingProvider: 'siliconflow',
+//   embeddingModel: 'BAAI/bge-m3',
+//   ...
+// }
+
+// 获取 Embedding 配置摘要
+const embeddingSummary = getEmbeddingConfigSummary();
+console.log(embeddingSummary);
+// {
+//   provider: 'siliconflow',
+//   model: 'BAAI/bge-m3',
+//   dimension: 1024,
+//   baseUrl: 'https://api.siliconflow.cn/v1',
+//   hasApiKey: true
+// }
 ```
 
 ### 创建模型实例
 
 ```typescript
-import { createLLM, createEmbedding, createReasoningModel } from '@/lib/model-config';
+import { createLLM, createReasoningModel } from '@/lib/model-config';
+import { createEmbeddingModel, getEmbeddingDimension } from '@/lib/embedding-config';
 
 // 创建 LLM (会根据 MODEL_PROVIDER 自动选择)
 const llm = createLLM();
@@ -262,46 +414,82 @@ const llm = createLLM();
 // 创建指定模型的 LLM
 const llm2 = createLLM('gpt-4o');
 
-// 创建 Embedding 模型
-const embedding = createEmbedding();
+// 创建 Embedding 模型 (会根据 EMBEDDING_PROVIDER 自动选择)
+const embedding = createEmbeddingModel();
+
+// 获取当前 Embedding 模型维度
+const dimension = getEmbeddingDimension();
+console.log(`当前 Embedding 维度: ${dimension}`);
 
 // 创建推理模型
 const reasoning = createReasoningModel();
-```
-
-### 动态注册模型
-
-```typescript
-import { getModelFactory } from '@/lib/model-config';
-
-const factory = getModelFactory();
-
-// 注册自定义模型
-factory.registerModel({
-  id: 'my-custom-model',
-  type: 'llm',
-  config: {
-    provider: 'custom',
-    modelName: 'my-model',
-    apiKey: 'xxx',
-    baseUrl: 'https://api.example.com',
-  },
-  description: '我的自定义模型',
-});
-
-// 获取所有注册的模型
-const models = factory.getRegisteredModels();
 ```
 
 ### 验证配置
 
 ```typescript
 import { getModelFactory } from '@/lib/model-config';
+import { validateEmbeddingConfig } from '@/lib/embedding-config';
 
+// 验证 LLM 配置
 const factory = getModelFactory();
-const validation = factory.validateConfig();
+const llmValidation = factory.validateConfig();
 
-if (!validation.valid) {
-  console.error('配置错误:', validation.errors);
+// 验证 Embedding 配置
+const embeddingValidation = validateEmbeddingConfig();
+
+if (!llmValidation.valid) {
+  console.error('LLM 配置错误:', llmValidation.errors);
+}
+
+if (!embeddingValidation.valid) {
+  console.error('Embedding 配置错误:', embeddingValidation.errors);
 }
 ```
+
+### 重新加载配置
+
+```typescript
+import { getModelFactory } from '@/lib/model-config';
+import { reloadEmbeddingConfig } from '@/lib/embedding-config';
+
+// 重新加载 LLM 配置
+getModelFactory().reloadConfig();
+
+// 重新加载 Embedding 配置
+reloadEmbeddingConfig();
+```
+
+---
+
+## 常见问题
+
+### Q: 如何选择 Embedding 提供商？
+
+| 场景 | 推荐方案 |
+|------|----------|
+| 本地开发，无需联网 | `ollama` + `nomic-embed-text` |
+| 生产环境，追求性价比 | `siliconflow` + `BAAI/bge-m3` |
+| 生产环境，追求最高质量 | `siliconflow` + `Qwen/Qwen3-Embedding-8B` |
+| 已有 OpenAI 账号 | `openai` + `text-embedding-3-small` |
+
+### Q: 切换 Embedding 提供商后需要重新生成向量吗？
+
+是的。不同模型生成的向量维度和语义空间不同，切换后需要：
+1. 更新 `MILVUS_DEFAULT_DIMENSION` 匹配新模型维度
+2. 重新创建 Milvus 集合 (或删除旧集合)
+3. 重新上传所有文档
+
+### Q: SiliconFlow 如何获取 API Key？
+
+1. 访问 https://cloud.siliconflow.cn
+2. 注册账号 (新用户送 2000 万 Tokens)
+3. 进入控制台 -> Account -> API Keys
+4. 创建新的 API Key
+
+### Q: Milvus 维度不匹配怎么办？
+
+如果出现 `dimension mismatch` 错误：
+1. 检查 `MILVUS_DEFAULT_DIMENSION` 是否与 Embedding 模型匹配
+2. 删除现有集合：通过 API 调用 `/api/milvus?action=recreate`
+3. 重新上传文档

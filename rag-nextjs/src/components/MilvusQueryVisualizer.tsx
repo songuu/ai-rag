@@ -90,6 +90,7 @@ export default function MilvusQueryVisualizer({
     try {
       const statusRes = await fetch('/api/milvus?action=status');
       const statusData = await statusRes.json();
+      console.log('statusData', statusData);
       if (statusData.success) {
         setMilvusStatus({
           connected: statusData.connected,
