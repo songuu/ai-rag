@@ -173,12 +173,14 @@ const ConfigPanel: React.FC<{
   embeddingModels: ModelInfo[];
   embeddingProvider?: string;
   isRemoteEmbedding?: boolean;
+  reasoningProvider?: string;
+  isRemoteReasoning?: boolean;
   isExpanded: boolean;
   onToggle: () => void;
   errorMessage?: string | null;
   suggestion?: string | null;
   onRefresh?: () => void;
-}> = ({ config, onChange, availableModels, llmModels, embeddingModels, embeddingProvider = 'ollama', isRemoteEmbedding = false, isExpanded, onToggle, errorMessage, suggestion, onRefresh }) => {
+}> = ({ config, onChange, availableModels, llmModels, embeddingModels, embeddingProvider = 'ollama', isRemoteEmbedding = false, reasoningProvider = 'ollama', isRemoteReasoning = false, isExpanded, onToggle, errorMessage, suggestion, onRefresh }) => {
   
   return (
     <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-xl border border-purple-500/30 overflow-hidden">
@@ -211,7 +213,7 @@ const ConfigPanel: React.FC<{
           <div>
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium text-purple-300">
-                🧠 推理模型 (本地已安装)
+                🧠 推理模型 {isRemoteReasoning ? `(${reasoningProvider})` : '(本地已安装)'}
               </label>
               {onRefresh && (
                 <button
@@ -226,8 +228,23 @@ const ConfigPanel: React.FC<{
               )}
             </div>
             
-            {/* 无推理模型时显示提示 */}
-            {availableModels.length === 0 ? (
+            {/* 远程推理模型提供商 - 显示环境变量配置的模型 */}
+            {isRemoteReasoning ? (
+              <div className="p-3 bg-purple-900/30 border border-purple-500/30 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-white font-medium">{config.reasoningModel}</div>
+                    <div className="text-xs text-gray-400 mt-1">
+                      通过环境变量配置 | {reasoningProvider}
+                    </div>
+                  </div>
+                  <svg className="w-5 h-5 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="通过环境变量配置">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                </div>
+              </div>
+            ) : availableModels.length === 0 ? (
+              /* 无推理模型时显示提示 */
               <div className="p-3 bg-amber-900/30 border border-amber-500/30 rounded-lg">
                 <div className="flex items-center gap-2 text-amber-300 mb-2">
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -244,7 +261,7 @@ const ConfigPanel: React.FC<{
                   </div>
                 )}
                 <div className="mt-2 text-xs text-gray-500">
-                  支持的推理模型：deepseek-r1、qwen3
+                  支持的推理模型：deepseek-r1、qwen3，或配置 REASONING_PROVIDER 使用远程模型
                 </div>
               </div>
             ) : (
@@ -547,7 +564,9 @@ export default function ReasoningRAGPage() {
   
   // 模型提供商配置
   const [embeddingProvider, setEmbeddingProvider] = useState<string>('ollama');
+  const [reasoningProvider, setReasoningProvider] = useState<string>('ollama');
   const isRemoteEmbedding = embeddingProvider !== 'ollama';
+  const isRemoteReasoning = reasoningProvider !== 'ollama';
   
   // 历史记录状态
   const [conversations, setConversations] = useState<ReasoningConversation[]>([]);
@@ -597,106 +616,104 @@ export default function ReasoningRAGPage() {
     }
   }, []);
   
-  // 加载可用模型
+  // 加载可用模型（使用统一的 API，自动处理远程/本地提供商）
   const loadModels = useCallback(async () => {
     try {
       setModelLoadError(null);
       setModelSuggestion(null);
       
-      // 首先获取系统配置，确定 Embedding 提供商
-      const healthRes = await fetch('/api/health');
-      const healthData = await healthRes.json();
+      // 使用统一的模型 API，自动处理所有提供商
+      const ollamaRes = await fetch('/api/ollama/models');
+      const ollamaData = await ollamaRes.json();
       
-      if (healthData.modelConfig?.embedding) {
-        const embConfig = healthData.modelConfig.embedding;
-        setEmbeddingProvider(embConfig.provider || 'ollama');
+      // 从 providerConfig 获取提供商配置
+      if (ollamaData.providerConfig) {
+        const { embedding, reasoning } = ollamaData.providerConfig;
         
-        // 如果是远程 Embedding 提供商，使用配置的模型
-        if (embConfig.provider && embConfig.provider !== 'ollama') {
-          setEmbeddingModels([{
-            id: embConfig.model,
-            name: embConfig.model,
-            displayName: embConfig.model.split('/').pop() || embConfig.model,
-            dimension: embConfig.dimension,
-            sizeFormatted: `${embConfig.dimension}D`,
-          }]);
-          setConfig(prev => ({ ...prev, embeddingModel: embConfig.model }));
+        // 设置 Embedding 提供商
+        if (embedding) {
+          setEmbeddingProvider(embedding.provider || 'ollama');
+        }
+        
+        // 设置推理模型提供商
+        if (reasoning) {
+          setReasoningProvider(reasoning.provider || 'ollama');
         }
       }
       
-      // 并行加载推理模型和本地 Ollama 模型
-      const [reasoningRes, ollamaRes] = await Promise.all([
-        fetch('/api/reasoning-rag?action=models'),
-        fetch('/api/ollama/models')
-      ]);
-      
-      const reasoningData = await reasoningRes.json();
-      const ollamaData = await ollamaRes.json();
-      
       // 处理推理模型
-      if (reasoningData.success) {
-        const models = reasoningData.reasoningModels || [];
-        setAvailableModels(models);
+      const reasoningModels = ollamaData.reasoningModels || [];
+      if (reasoningModels.length > 0) {
+        setAvailableModels(reasoningModels.map((m: { name: string; displayName?: string; sizeFormatted?: string; supportsThinking?: boolean; isRemote?: boolean; provider?: string }) => ({
+          id: m.name,
+          name: m.name,
+          displayName: m.displayName || m.name.split(':')[0],
+          sizeFormatted: m.sizeFormatted,
+          installed: true,
+          supportsThinking: m.supportsThinking || true,
+          isRemote: m.isRemote || false,
+          provider: m.provider
+        })));
         
-        if (models.length === 0) {
-          setModelLoadError(reasoningData.message || '未检测到已安装的推理模型');
-          setModelSuggestion(reasoningData.suggestion || '请安装推理模型: ollama pull deepseek-r1:7b');
-          setConfig(prev => ({ ...prev, reasoningModel: '' }));
-        } else {
-          const currentExists = models.find((m: ModelInfo) => m.id === config.reasoningModel);
-          if (!currentExists) {
-            setConfig(prev => ({ ...prev, reasoningModel: models[0].id }));
-          }
+        // 如果当前配置的模型不在列表中，选择第一个
+        const currentExists = reasoningModels.find((m: { name: string }) => m.name === config.reasoningModel);
+        if (!currentExists) {
+          setConfig(prev => ({ ...prev, reasoningModel: reasoningModels[0].name }));
+        }
+      } else {
+        setModelLoadError(ollamaData.message || '未检测到推理模型');
+        setModelSuggestion(ollamaData.suggestion || '请安装推理模型或配置远程提供商');
+      }
+      
+      // 处理 Embedding 模型
+      const embedModels = ollamaData.embeddingModels || [];
+      if (embedModels.length > 0) {
+        setEmbeddingModels(embedModels.map((m: { name: string; displayName?: string; sizeFormatted?: string; dimension?: number; isRemote?: boolean; provider?: string }) => ({
+          id: m.name,
+          name: m.name,
+          displayName: m.displayName || m.name.split('/').pop() || m.name,
+          sizeFormatted: m.sizeFormatted,
+          dimension: m.dimension,
+          isRemote: m.isRemote || false,
+          provider: m.provider
+        })));
+        
+        // 如果当前配置的模型不在列表中，选择第一个
+        const currentExists = embedModels.find((m: { name: string }) => m.name === config.embeddingModel);
+        if (!currentExists) {
+          setConfig(prev => ({ ...prev, embeddingModel: embedModels[0].name }));
         }
       }
       
       // 处理 LLM 模型 (快速模型)
-      if (ollamaData.success && ollamaData.llmModels) {
-        const fastModels = ollamaData.llmModels.map((m: { name: string; displayName?: string; sizeFormatted?: string }) => ({
+      const llmModelsList = ollamaData.llmModels || [];
+      if (llmModelsList.length > 0) {
+        const fastModels = llmModelsList.map((m: { name: string; displayName?: string; sizeFormatted?: string; isRemote?: boolean; provider?: string }) => ({
           id: m.name,
           name: m.name,
           displayName: m.displayName || m.name.split(':')[0],
           description: '通用 LLM 模型',
           sizeFormatted: m.sizeFormatted,
           installed: true,
-          supportsThinking: false
+          supportsThinking: false,
+          isRemote: m.isRemote || false,
+          provider: m.provider
         }));
         setLlmModels(fastModels);
         
         // 如果当前选中的快速模型不在列表中，选择第一个
-        if (fastModels.length > 0) {
-          const currentExists = fastModels.find((m: ModelInfo) => m.id === config.fastModel || m.name.includes(config.fastModel));
-          if (!currentExists) {
-            setConfig(prev => ({ ...prev, fastModel: fastModels[0].id }));
-          }
+        const currentExists = fastModels.find((m: ModelInfo) => m.id === config.fastModel);
+        if (!currentExists && fastModels.length > 0) {
+          setConfig(prev => ({ ...prev, fastModel: fastModels[0].id }));
         }
       }
       
-      // 处理 embedding 模型（仅 Ollama 提供商）
-      if (!isRemoteEmbedding && ollamaData.success && ollamaData.embeddingModels) {
-        const embedModels = ollamaData.embeddingModels.map((m: { name: string; displayName?: string; sizeFormatted?: string; dimension?: number }) => ({
-          id: m.name,
-          name: m.name,
-          displayName: m.displayName || m.name.split(':')[0],
-          sizeFormatted: m.sizeFormatted,
-          dimension: m.dimension
-        }));
-        setEmbeddingModels(embedModels);
-        
-        // 如果当前选中的模型不在列表中，选择第一个
-        if (embedModels.length > 0) {
-          const currentExists = embedModels.find((m: ModelInfo) => m.id === config.embeddingModel || m.name.includes(config.embeddingModel));
-          if (!currentExists) {
-            setConfig(prev => ({ ...prev, embeddingModel: embedModels[0].id }));
-          }
-        }
-      }
     } catch (error) {
       console.error('Failed to load models:', error);
       setModelLoadError('无法连接到服务');
-      setModelSuggestion('请确保 Ollama 服务正在运行');
+      setModelSuggestion('请检查网络连接或服务配置');
     }
-  }, [config.reasoningModel, config.embeddingModel, config.fastModel, isRemoteEmbedding]);
+  }, [config.reasoningModel, config.embeddingModel, config.fastModel]);
   
   // 初始化加载
   useEffect(() => {
@@ -1181,6 +1198,8 @@ export default function ReasoningRAGPage() {
               embeddingModels={embeddingModels}
               embeddingProvider={embeddingProvider}
               isRemoteEmbedding={isRemoteEmbedding}
+              reasoningProvider={reasoningProvider}
+              isRemoteReasoning={isRemoteReasoning}
               isExpanded={configExpanded}
               onToggle={() => setConfigExpanded(!configExpanded)}
               errorMessage={modelLoadError}

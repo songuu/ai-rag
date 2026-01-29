@@ -109,6 +109,78 @@ CUSTOM_LLM_MODEL=deepseek-chat
 
 ---
 
+## 推理模型提供商配置（独立）
+
+### 主开关
+
+`REASONING_PROVIDER` 环境变量**独立控制**推理模型提供商：
+
+| 值 | 说明 |
+|---|---|
+| `ollama` | 使用本地 Ollama 推理模型（默认跟随 `MODEL_PROVIDER`） |
+| `openai` | 使用 OpenAI 推理模型 |
+| `custom` | 使用自定义 OpenAI 兼容 API (如 DeepSeek) |
+
+> **注意**: 如果未设置 `REASONING_PROVIDER`，将自动跟随 `MODEL_PROVIDER` 的设置。
+
+### Ollama 推理模型配置
+
+当 `REASONING_PROVIDER=ollama` 时使用：
+
+```bash
+# Ollama 服务地址（共用）
+OLLAMA_BASE_URL=http://localhost:11434
+
+# 推理模型名称
+# 推荐: deepseek-r1, qwen3
+OLLAMA_REASONING_MODEL=deepseek-r1
+```
+
+### OpenAI 推理模型配置
+
+当 `REASONING_PROVIDER=openai` 时使用：
+
+```bash
+# API Key（共用 OpenAI 配置）
+OPENAI_API_KEY=sk-xxxxx
+
+# API 基础地址（可选）
+OPENAI_BASE_URL=
+
+# 推理模型
+OPENAI_REASONING_MODEL=gpt-4o
+```
+
+### 自定义推理模型 API 配置
+
+当 `REASONING_PROVIDER=custom` 时使用：
+
+```bash
+# API Key (可独立配置，默认复用 CUSTOM_API_KEY)
+CUSTOM_REASONING_API_KEY=sk-xxxxx
+
+# API 基础地址 (可独立配置，默认复用 CUSTOM_BASE_URL)
+# DeepSeek Reasoner: https://api.deepseek.com
+CUSTOM_REASONING_BASE_URL=https://api.deepseek.com
+
+# 模型名称
+# DeepSeek: deepseek-reasoner
+CUSTOM_REASONING_MODEL=deepseek-reasoner
+```
+
+### 配置说明
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `REASONING_PROVIDER` | 跟随 `MODEL_PROVIDER` | 推理模型提供商 |
+| `OLLAMA_REASONING_MODEL` | `deepseek-r1` | Ollama 推理模型 |
+| `OPENAI_REASONING_MODEL` | `gpt-4o` | OpenAI 推理模型 |
+| `CUSTOM_REASONING_API_KEY` | 复用 `CUSTOM_API_KEY` | 自定义推理 API Key |
+| `CUSTOM_REASONING_BASE_URL` | 复用 `CUSTOM_BASE_URL` | 自定义推理 API 地址 |
+| `CUSTOM_REASONING_MODEL` | `deepseek-reasoner` | 自定义推理模型名称 |
+
+---
+
 ## Embedding 提供商配置 (独立)
 
 ### 主开关
@@ -286,6 +358,86 @@ MILVUS_DEFAULT_METRIC_TYPE=COSINE
 
 ---
 
+## Reasoning RAG 配置（独立）
+
+Reasoning RAG 使用独立的配置，与主应用的 Milvus 配置分离。这样可以：
+- 使用不同的集合存储推理文档
+- 配置不同的向量维度
+- 独立调整检索和推理参数
+
+### 主要配置
+
+```bash
+# Reasoning RAG 专用集合名称（独立于主应用）
+REASONING_RAG_COLLECTION=reasoning_rag_documents
+
+# Reasoning RAG 专用向量维度（独立于主应用）
+# 不设置时自动从 EMBEDDING_PROVIDER 对应的模型维度获取
+REASONING_RAG_DIMENSION=1024
+
+# 文件上传目录
+REASONING_RAG_UPLOAD_DIR=reasoning-uploads
+```
+
+### 向量化配置
+
+```bash
+# 文本块大小（字符数）
+# 注意：会根据 Embedding 模型的 maxTokens 自动调整
+REASONING_RAG_CHUNK_SIZE=500
+
+# 文本块重叠大小
+REASONING_RAG_CHUNK_OVERLAP=50
+```
+
+### 检索配置
+
+```bash
+# 初始检索数量
+REASONING_RAG_TOP_K=50
+
+# 重排后保留数量
+REASONING_RAG_RERANK_TOP_K=5
+
+# 相似度阈值
+REASONING_RAG_SIMILARITY_THRESHOLD=0.3
+
+# 是否启用 BM25 混合检索
+REASONING_RAG_ENABLE_BM25=true
+
+# 是否启用重排序
+REASONING_RAG_ENABLE_RERANK=true
+```
+
+### 推理配置
+
+```bash
+# 最大推理迭代次数
+REASONING_RAG_MAX_ITERATIONS=3
+
+# 生成温度
+REASONING_RAG_TEMPERATURE=0.7
+```
+
+### 配置说明
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `REASONING_RAG_COLLECTION` | `reasoning_rag_documents` | 专用集合，与主应用分离 |
+| `REASONING_RAG_DIMENSION` | 自动获取 | 跟随 Embedding 模型维度 |
+| `REASONING_RAG_UPLOAD_DIR` | `reasoning-uploads` | 文件上传目录 |
+| `REASONING_RAG_CHUNK_SIZE` | `500` | 会自动适配模型 maxTokens |
+| `REASONING_RAG_CHUNK_OVERLAP` | `50` | 块重叠大小 |
+| `REASONING_RAG_TOP_K` | `50` | 初始检索数量 |
+| `REASONING_RAG_RERANK_TOP_K` | `5` | 重排后保留数量 |
+| `REASONING_RAG_SIMILARITY_THRESHOLD` | `0.3` | 相似度阈值 |
+| `REASONING_RAG_ENABLE_BM25` | `true` | 启用混合检索 |
+| `REASONING_RAG_ENABLE_RERANK` | `true` | 启用重排序 |
+| `REASONING_RAG_MAX_ITERATIONS` | `3` | 最大迭代次数 |
+| `REASONING_RAG_TEMPERATURE` | `0.7` | 生成温度 |
+
+---
+
 ## 完整配置示例
 
 ### 示例 1: 本地开发 (全本地)
@@ -326,6 +478,10 @@ MILVUS_PROVIDER=zilliz
 MILVUS_ZILLIZ_ENDPOINT=in01-xxx.api.gcp-us-west1.zillizcloud.com:443
 MILVUS_ZILLIZ_TOKEN=xxxxx
 MILVUS_DEFAULT_DIMENSION=1024  # 匹配 bge-m3 维度
+
+# Reasoning RAG 独立配置（可选）
+REASONING_RAG_COLLECTION=reasoning_rag_documents
+REASONING_RAG_DIMENSION=1024  # 跟随 Embedding 模型维度
 ```
 
 ### 示例 3: 生产环境 (全云端)
@@ -357,6 +513,73 @@ MODEL_PROVIDER=custom
 CUSTOM_API_KEY=sk-xxxxx
 CUSTOM_BASE_URL=https://api.deepseek.com
 CUSTOM_LLM_MODEL=deepseek-chat
+
+# Embedding 配置 - 使用 SiliconFlow
+EMBEDDING_PROVIDER=siliconflow
+SILICONFLOW_API_KEY=sk-xxxxx
+SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
+
+# Milvus 配置
+MILVUS_PROVIDER=local
+MILVUS_LOCAL_ADDRESS=localhost:19530
+MILVUS_DEFAULT_DIMENSION=1024
+```
+
+### 示例 5: 完整 Reasoning RAG 配置
+
+```bash
+# LLM 配置 - 使用 DeepSeek
+MODEL_PROVIDER=custom
+CUSTOM_API_KEY=sk-xxxxx
+CUSTOM_BASE_URL=https://api.deepseek.com
+CUSTOM_LLM_MODEL=deepseek-chat
+
+# 推理模型配置 - 独立使用 DeepSeek Reasoner
+REASONING_PROVIDER=custom
+CUSTOM_REASONING_API_KEY=sk-xxxxx  # 可省略，默认复用 CUSTOM_API_KEY
+CUSTOM_REASONING_BASE_URL=https://api.deepseek.com  # 可省略，默认复用 CUSTOM_BASE_URL
+CUSTOM_REASONING_MODEL=deepseek-reasoner
+
+# Embedding 配置 - 使用 SiliconFlow
+EMBEDDING_PROVIDER=siliconflow
+SILICONFLOW_API_KEY=sk-xxxxx
+SILICONFLOW_EMBEDDING_MODEL=BAAI/bge-m3
+
+# 主应用 Milvus 配置
+MILVUS_PROVIDER=zilliz
+MILVUS_ZILLIZ_ENDPOINT=in01-xxx.api.gcp-us-west1.zillizcloud.com:443
+MILVUS_ZILLIZ_TOKEN=xxxxx
+MILVUS_DEFAULT_COLLECTION=rag_documents
+MILVUS_DEFAULT_DIMENSION=1024
+
+# Reasoning RAG 独立配置（与主应用分离）
+REASONING_RAG_COLLECTION=reasoning_rag_documents
+REASONING_RAG_DIMENSION=1024
+REASONING_RAG_UPLOAD_DIR=reasoning-uploads
+REASONING_RAG_CHUNK_SIZE=500
+REASONING_RAG_CHUNK_OVERLAP=50
+REASONING_RAG_TOP_K=50
+REASONING_RAG_RERANK_TOP_K=5
+REASONING_RAG_SIMILARITY_THRESHOLD=0.3
+REASONING_RAG_ENABLE_BM25=true
+REASONING_RAG_ENABLE_RERANK=true
+REASONING_RAG_MAX_ITERATIONS=3
+REASONING_RAG_TEMPERATURE=0.7
+```
+
+### 示例 6: LLM 和推理模型使用不同提供商
+
+```bash
+# LLM 配置 - 使用本地 Ollama（省钱）
+MODEL_PROVIDER=ollama
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_LLM_MODEL=llama3.1
+
+# 推理模型配置 - 使用 DeepSeek Reasoner（强推理能力）
+REASONING_PROVIDER=custom
+CUSTOM_REASONING_API_KEY=sk-xxxxx
+CUSTOM_REASONING_BASE_URL=https://api.deepseek.com
+CUSTOM_REASONING_MODEL=deepseek-reasoner
 
 # Embedding 配置 - 使用 SiliconFlow
 EMBEDDING_PROVIDER=siliconflow
@@ -493,3 +716,34 @@ reloadEmbeddingConfig();
 1. 检查 `MILVUS_DEFAULT_DIMENSION` 是否与 Embedding 模型匹配
 2. 删除现有集合：通过 API 调用 `/api/milvus?action=recreate`
 3. 重新上传文档
+
+### Q: Reasoning RAG 和主应用的数据是分开的吗？
+
+是的。Reasoning RAG 使用独立的配置和集合：
+- 主应用使用 `MILVUS_DEFAULT_COLLECTION`（默认 `rag_documents`）
+- Reasoning RAG 使用 `REASONING_RAG_COLLECTION`（默认 `reasoning_rag_documents`）
+
+两者的数据完全隔离，可以独立配置向量维度。
+
+### Q: Reasoning RAG 向量化时报 "input length exceeds context length" 错误？
+
+这是因为文本块超过了 Embedding 模型的上下文长度限制。系统会自动根据模型的 maxTokens 调整 chunkSize：
+
+| 模型 | maxTokens | 安全 chunkSize |
+|------|-----------|---------------|
+| `BAAI/bge-large-zh-v1.5` | 512 | ~200 字符 |
+| `nomic-embed-text` | 2048 | ~800 字符 |
+| `BAAI/bge-m3` | 8192 | ~2000 字符 |
+
+建议使用 `BAAI/bge-m3` 或 `Qwen3-Embedding` 系列，支持更长的文本。
+
+### Q: 如何查看 Reasoning RAG 当前配置？
+
+调用 API：
+```bash
+# 获取完整配置
+curl http://localhost:3000/api/reasoning-rag?action=config
+
+# 获取向量化状态和配置
+curl http://localhost:3000/api/reasoning-rag/vectorize
+```

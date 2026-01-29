@@ -12,7 +12,7 @@ import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { Embeddings } from '@langchain/core/embeddings';
 import { getMilvusInstance } from './milvus-client';
 import { IntentClassification } from './intent-router';
-import { createLLM, createEmbedding, selectModelByDimension, getModelFactory } from './model-config';
+import { createLLM, createEmbedding, createReasoningModel, selectModelByDimension, getModelFactory } from './model-config';
 
 // 帮助函数：从 LLM 响应中提取内容
 function extractContent(response: any): string {
@@ -455,8 +455,8 @@ export async function* executeLane3(
       timestamp: Date.now()
     };
 
-    // 使用统一配置系统创建推理模型
-    const plannerLLM = createLLM(reasoningModel, {
+    // 使用统一配置系统创建推理模型（使用独立的 REASONING_PROVIDER）
+    const plannerLLM = createReasoningModel(reasoningModel, {
       temperature: 0.3,
     });
 
@@ -608,8 +608,8 @@ export async function* executeLane3(
       timestamp: Date.now()
     };
 
-    // 使用统一配置系统创建推理模型
-    const reasonerLLM = createLLM(reasoningModel, {
+    // 使用统一配置系统创建推理模型（使用独立的 REASONING_PROVIDER）
+    const reasonerLLM = createReasoningModel(reasoningModel, {
       temperature: config.temperature ?? 0.5,
     });
 

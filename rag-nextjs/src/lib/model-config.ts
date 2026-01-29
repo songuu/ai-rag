@@ -63,6 +63,9 @@ export interface EnvConfig {
   // 主开关：控制使用本地还是生产模型
   MODEL_PROVIDER: ModelProvider;
 
+  // 推理模型提供商（独立于 LLM）
+  REASONING_PROVIDER: ModelProvider;
+
   // Ollama 配置
   OLLAMA_BASE_URL: string;
   OLLAMA_LLM_MODEL: string;
@@ -82,11 +85,16 @@ export interface EnvConfig {
   AZURE_OPENAI_LLM_DEPLOYMENT?: string;
   AZURE_OPENAI_EMBEDDING_DEPLOYMENT?: string;
 
-  // 自定义 API 配置
+  // 自定义 LLM API 配置
   CUSTOM_API_KEY?: string;
   CUSTOM_BASE_URL?: string;
   CUSTOM_LLM_MODEL?: string;
   CUSTOM_EMBEDDING_MODEL?: string;
+
+  // 自定义推理模型 API 配置（独立于 LLM）
+  CUSTOM_REASONING_API_KEY?: string;
+  CUSTOM_REASONING_BASE_URL?: string;
+  CUSTOM_REASONING_MODEL?: string;
 }
 
 /** 模型实例缓存 */
@@ -132,9 +140,18 @@ const DEFAULT_OPENAI_CONFIG = {
  * 从环境变量读取配置
  */
 export function loadEnvConfig(): EnvConfig {
+  // 获取主 LLM 提供商
+  const llmProvider = (process.env.MODEL_PROVIDER as ModelProvider) || 'ollama';
+
+  // 推理模型提供商：独立配置，默认跟随 LLM 提供商
+  const reasoningProvider = (process.env.REASONING_PROVIDER as ModelProvider) || llmProvider;
+
   return {
     // 主开关
-    MODEL_PROVIDER: (process.env.MODEL_PROVIDER as ModelProvider) || 'ollama',
+    MODEL_PROVIDER: llmProvider,
+
+    // 推理模型提供商（独立）
+    REASONING_PROVIDER: reasoningProvider,
 
     // Ollama
     OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
@@ -155,11 +172,16 @@ export function loadEnvConfig(): EnvConfig {
     AZURE_OPENAI_LLM_DEPLOYMENT: process.env.AZURE_OPENAI_LLM_DEPLOYMENT,
     AZURE_OPENAI_EMBEDDING_DEPLOYMENT: process.env.AZURE_OPENAI_EMBEDDING_DEPLOYMENT,
 
-    // Custom
+    // Custom LLM
     CUSTOM_API_KEY: process.env.CUSTOM_API_KEY,
     CUSTOM_BASE_URL: process.env.CUSTOM_BASE_URL,
     CUSTOM_LLM_MODEL: process.env.CUSTOM_LLM_MODEL,
     CUSTOM_EMBEDDING_MODEL: process.env.CUSTOM_EMBEDDING_MODEL,
+
+    // Custom Reasoning（独立配置，默认复用 Custom LLM 配置）
+    CUSTOM_REASONING_API_KEY: process.env.CUSTOM_REASONING_API_KEY || process.env.CUSTOM_API_KEY,
+    CUSTOM_REASONING_BASE_URL: process.env.CUSTOM_REASONING_BASE_URL || process.env.CUSTOM_BASE_URL,
+    CUSTOM_REASONING_MODEL: process.env.CUSTOM_REASONING_MODEL || 'deepseek-reasoner',
   };
 }
 
@@ -455,12 +477,21 @@ export class ModelFactory {
   // ==================== Reasoning 模型 ====================
 
   /**
+   * 获取推理模型提供商
+   */
+  getReasoningProvider(): ModelProvider {
+    return this.envConfig.REASONING_PROVIDER;
+  }
+
+  /**
    * 创建推理模型实例 (用于复杂推理任务)
+   * 使用独立的 REASONING_PROVIDER 配置
    * @param modelName 可选的模型名称
    * @param options 额外配置选项
    */
   createReasoningModel(modelName?: string, options: Partial<ModelConfig> = {}): BaseChatModel {
-    const provider = this.envConfig.MODEL_PROVIDER;
+    // 使用独立的推理模型提供商
+    const provider = this.envConfig.REASONING_PROVIDER;
     const cacheKey = `reasoning:${provider}:${modelName || 'default'}:${JSON.stringify(options)}`;
 
     if (this.cache.reasoning.has(cacheKey)) {
@@ -494,12 +525,36 @@ export class ModelFactory {
         break;
 
       case 'azure':
+        // Azure 使用 LLM 部署
+        console.log(`[ModelFactory] 创建 Azure 推理模型`);
+        model = this.createAzureLLM(modelName, reasoningOptions);
+        break;
+
       case 'custom':
-        model = this.createLLM(modelName, reasoningOptions);
+        // 使用独立的 Custom Reasoning 配置
+        const customModel = modelName || this.envConfig.CUSTOM_REASONING_MODEL;
+        const apiKey = this.envConfig.CUSTOM_REASONING_API_KEY;
+        const baseUrl = this.envConfig.CUSTOM_REASONING_BASE_URL;
+        
+        if (!apiKey || !baseUrl) {
+          throw new Error('[ModelFactory] Custom Reasoning 需要配置 CUSTOM_REASONING_API_KEY 和 CUSTOM_REASONING_BASE_URL');
+        }
+
+        console.log(`[ModelFactory] 创建 Custom 推理模型: ${customModel} @ ${baseUrl}`);
+        model = new ChatOpenAI({
+          ...reasoningOptions.options,
+          apiKey: apiKey,
+          model: customModel,
+          temperature: reasoningOptions.temperature,
+          maxTokens: reasoningOptions.maxTokens,
+          configuration: {
+            baseURL: baseUrl,
+          },
+        });
         break;
 
       default:
-        throw new Error(`不支持的模型提供商: ${provider}`);
+        throw new Error(`不支持的推理模型提供商: ${provider}`);
     }
 
     this.cache.reasoning.set(cacheKey, model);
@@ -543,11 +598,15 @@ export class ModelFactory {
     embeddingModel: string;
     embeddingProvider: EmbeddingProvider;
     reasoningModel: string;
+    reasoningProvider: ModelProvider;
+    reasoningBaseUrl: string;
+    hasReasoningApiKey: boolean;
     baseUrl: string;
     hasApiKey: boolean;
     embeddingConfig: ReturnType<typeof getEmbeddingConfigSummary>;
   } {
     const provider = this.envConfig.MODEL_PROVIDER;
+    const reasoningProvider = this.envConfig.REASONING_PROVIDER;
     const embeddingConfig = getEmbeddingConfigSummary();
 
     let llmModel = '';
@@ -572,8 +631,35 @@ export class ModelFactory {
         baseUrl = this.envConfig.OLLAMA_BASE_URL;
         hasApiKey = true;
         break;
-    };
+    }
 
+    // 获取推理模型配置
+    let reasoningModel = '';
+    let reasoningBaseUrl = '';
+    let hasReasoningApiKey = false;
+
+    switch (reasoningProvider) {
+      case 'ollama':
+        reasoningModel = this.envConfig.OLLAMA_REASONING_MODEL;
+        reasoningBaseUrl = this.envConfig.OLLAMA_BASE_URL;
+        hasReasoningApiKey = true;
+        break;
+      case 'openai':
+        reasoningModel = this.envConfig.OPENAI_REASONING_MODEL;
+        reasoningBaseUrl = this.envConfig.OPENAI_BASE_URL || 'https://api.openai.com';
+        hasReasoningApiKey = !!this.envConfig.OPENAI_API_KEY;
+        break;
+      case 'custom':
+        reasoningModel = this.envConfig.CUSTOM_REASONING_MODEL || '';
+        reasoningBaseUrl = this.envConfig.CUSTOM_REASONING_BASE_URL || '';
+        hasReasoningApiKey = !!this.envConfig.CUSTOM_REASONING_API_KEY;
+        break;
+      case 'azure':
+        reasoningModel = this.envConfig.AZURE_OPENAI_LLM_DEPLOYMENT || '';
+        reasoningBaseUrl = this.envConfig.AZURE_OPENAI_ENDPOINT || '';
+        hasReasoningApiKey = !!this.envConfig.AZURE_OPENAI_API_KEY;
+        break;
+    }
 
     return {
       provider,
@@ -582,9 +668,10 @@ export class ModelFactory {
       hasApiKey,
       embeddingModel: embeddingConfig.model,
       embeddingProvider: embeddingConfig.provider,
-      reasoningModel: provider === 'ollama'
-        ? this.envConfig.OLLAMA_REASONING_MODEL
-        : this.envConfig.OPENAI_REASONING_MODEL,
+      reasoningModel,
+      reasoningProvider,
+      reasoningBaseUrl,
+      hasReasoningApiKey,
       embeddingConfig,
     };
   }
@@ -682,10 +769,17 @@ export function selectModelByDimension(dimension: number): string {
 }
 
 /**
- * 获取当前提供商
+ * 获取当前 LLM 提供商
  */
 export function getCurrentProvider(): ModelProvider {
   return getModelFactory().getProvider();
+}
+
+/**
+ * 获取推理模型提供商
+ */
+export function getReasoningProvider(): ModelProvider {
+  return getModelFactory().getReasoningProvider();
 }
 
 /**

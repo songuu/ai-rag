@@ -376,3 +376,128 @@ export function getDefaultCollectionConfig() {
     metricType: config.defaultMetricType,
   };
 }
+
+// ==================== Reasoning RAG 专用配置 ====================
+
+/**
+ * Reasoning RAG 独立配置
+ * 支持与主应用分离的集合和维度设置
+ */
+export interface ReasoningRAGConfig {
+  // 集合配置
+  collection: string;
+  dimension: number;
+  
+  // 上传目录
+  uploadDir: string;
+  
+  // 向量化配置
+  chunkSize: number;
+  chunkOverlap: number;
+  
+  // 检索配置
+  topK: number;
+  rerankTopK: number;
+  similarityThreshold: number;
+  enableBM25: boolean;
+  enableRerank: boolean;
+  
+  // 推理配置
+  maxIterations: number;
+  temperature: number;
+}
+
+/**
+ * 从环境变量加载 Reasoning RAG 配置
+ * 环境变量前缀: REASONING_RAG_
+ */
+function loadReasoningRAGEnvConfig(): ReasoningRAGConfig {
+  // 如果没有设置 REASONING_RAG_DIMENSION，则从 embedding-config 自动获取
+  const dimension = process.env.REASONING_RAG_DIMENSION
+    ? parseInt(process.env.REASONING_RAG_DIMENSION, 10)
+    : getEmbeddingDimensionLazy();
+  
+  return {
+    // 集合配置 - 独立于主应用
+    collection: process.env.REASONING_RAG_COLLECTION || 'reasoning_rag_documents',
+    dimension,
+    
+    // 上传目录
+    uploadDir: process.env.REASONING_RAG_UPLOAD_DIR || 'reasoning-uploads',
+    
+    // 向量化配置
+    chunkSize: parseInt(process.env.REASONING_RAG_CHUNK_SIZE || '500', 10),
+    chunkOverlap: parseInt(process.env.REASONING_RAG_CHUNK_OVERLAP || '50', 10),
+    
+    // 检索配置
+    topK: parseInt(process.env.REASONING_RAG_TOP_K || '50', 10),
+    rerankTopK: parseInt(process.env.REASONING_RAG_RERANK_TOP_K || '5', 10),
+    similarityThreshold: parseFloat(process.env.REASONING_RAG_SIMILARITY_THRESHOLD || '0.3'),
+    enableBM25: process.env.REASONING_RAG_ENABLE_BM25 !== 'false', // 默认启用
+    enableRerank: process.env.REASONING_RAG_ENABLE_RERANK !== 'false', // 默认启用
+    
+    // 推理配置
+    maxIterations: parseInt(process.env.REASONING_RAG_MAX_ITERATIONS || '3', 10),
+    temperature: parseFloat(process.env.REASONING_RAG_TEMPERATURE || '0.7'),
+  };
+}
+
+// Reasoning RAG 配置缓存
+let _reasoningRAGConfig: ReasoningRAGConfig | null = null;
+
+/**
+ * 获取 Reasoning RAG 配置
+ */
+export function getReasoningRAGConfig(): ReasoningRAGConfig {
+  if (!_reasoningRAGConfig) {
+    _reasoningRAGConfig = loadReasoningRAGEnvConfig();
+    console.log('[MilvusConfig] Reasoning RAG 配置已加载:', {
+      collection: _reasoningRAGConfig.collection,
+      dimension: _reasoningRAGConfig.dimension,
+      uploadDir: _reasoningRAGConfig.uploadDir,
+    });
+  }
+  return _reasoningRAGConfig;
+}
+
+/**
+ * 重新加载 Reasoning RAG 配置
+ */
+export function reloadReasoningRAGConfig(): void {
+  _reasoningRAGConfig = null;
+  console.log('[MilvusConfig] Reasoning RAG 配置已重置');
+}
+
+/**
+ * 获取 Reasoning RAG 配置摘要（用于 API 返回）
+ */
+export function getReasoningRAGConfigSummary() {
+  const config = getReasoningRAGConfig();
+  const milvusConfig = getMilvusConnectionConfig();
+  
+  return {
+    // 集合配置
+    collection: config.collection,
+    dimension: config.dimension,
+    uploadDir: config.uploadDir,
+    
+    // Milvus 连接信息
+    milvusProvider: milvusConfig.provider,
+    milvusEndpoint: milvusConfig.address,
+    
+    // 向量化配置
+    chunkSize: config.chunkSize,
+    chunkOverlap: config.chunkOverlap,
+    
+    // 检索配置
+    topK: config.topK,
+    rerankTopK: config.rerankTopK,
+    similarityThreshold: config.similarityThreshold,
+    enableBM25: config.enableBM25,
+    enableRerank: config.enableRerank,
+    
+    // 推理配置
+    maxIterations: config.maxIterations,
+    temperature: config.temperature,
+  };
+}

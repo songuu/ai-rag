@@ -11,11 +11,20 @@ import { existsSync } from 'fs';
 import path from 'path';
 import { MilvusVectorStore } from '@/lib/milvus-client';
 import { createEmbedding, getModelFactory } from '@/lib/model-config';
-import { getEmbeddingConfigSummary, getEmbeddingDimension, ALL_EMBEDDING_DIMENSIONS } from '@/lib/embedding-config';
+import { getEmbeddingConfigSummary, getEmbeddingDimension, ALL_EMBEDDING_DIMENSIONS, SILICONFLOW_MODELS } from '@/lib/embedding-config';
+import { getReasoningRAGConfig, getReasoningRAGConfigSummary } from '@/lib/milvus-config';
 
-// Reasoning RAG 专用配置
-const REASONING_UPLOAD_DIR = path.join(process.cwd(), 'reasoning-uploads');
-const REASONING_COLLECTION = 'reasoning_rag_documents';
+// 获取 Reasoning RAG 配置（从环境变量）
+function getConfig() {
+  const ragConfig = getReasoningRAGConfig();
+  return {
+    uploadDir: path.join(process.cwd(), ragConfig.uploadDir),
+    collection: ragConfig.collection,
+    dimension: ragConfig.dimension,
+    chunkSize: ragConfig.chunkSize,
+    chunkOverlap: ragConfig.chunkOverlap,
+  };
+}
 
 // 使用独立的 Embedding 配置系统
 const embeddingConfig = getEmbeddingConfigSummary();
@@ -24,13 +33,62 @@ const DEFAULT_EMBEDDING_MODEL = embeddingConfig.model;
 // 模型维度映射 - 使用统一映射
 const MODEL_DIMENSIONS = ALL_EMBEDDING_DIMENSIONS;
 
+// 模型 maxTokens 限制映射
+const MODEL_MAX_TOKENS: Record<string, number> = {
+  // SiliconFlow 模型
+  'BAAI/bge-large-zh-v1.5': 512,
+  'BAAI/bge-large-en-v1.5': 512,
+  'BAAI/bge-m3': 8192,
+  'Pro/BAAI/bge-m3': 8192,
+  'Qwen/Qwen3-Embedding-8B': 32768,
+  'Qwen/Qwen3-Embedding-4B': 32768,
+  'Qwen/Qwen3-Embedding-0.6B': 32768,
+  'netease-youdao/bce-embedding-base_v1': 512,
+  // Ollama 模型 (估计值)
+  'nomic-embed-text': 2048,
+  'nomic-embed-text-v2-moe': 2048,
+  'bge-m3': 8192,
+  'bge-large': 512,
+  'all-minilm': 512,
+  'mxbai-embed-large': 512,
+  // 默认值
+  'default': 512,
+};
+
 function getModelDimension(model: string): number {
-  // 优先使用 embedding-config 的维度
+  // 优先使用 Reasoning RAG 配置的维度
+  const ragConfig = getReasoningRAGConfig();
   if (!model || model === DEFAULT_EMBEDDING_MODEL) {
-    return getEmbeddingDimension();
+    return ragConfig.dimension;
   }
   const baseName = model.split(':')[0];
-  return MODEL_DIMENSIONS[baseName] || MODEL_DIMENSIONS[model] || 768;
+  return MODEL_DIMENSIONS[baseName] || MODEL_DIMENSIONS[model] || ragConfig.dimension;
+}
+
+/**
+ * 获取模型的 maxTokens 限制
+ * 用于自动调整 chunkSize
+ */
+function getModelMaxTokens(model: string): number {
+  // 检查 SiliconFlow 模型
+  if (model in SILICONFLOW_MODELS) {
+    return (SILICONFLOW_MODELS as Record<string, { maxTokens?: number }>)[model]?.maxTokens || MODEL_MAX_TOKENS['default'];
+  }
+  // 检查本地映射
+  const baseName = model.split(':')[0];
+  return MODEL_MAX_TOKENS[baseName] || MODEL_MAX_TOKENS[model] || MODEL_MAX_TOKENS['default'];
+}
+
+/**
+ * 根据 maxTokens 计算安全的 chunkSize
+ * 中文约 1 字符 = 1.5-2 tokens，保守起见用 2
+ * 留 20% 余量
+ */
+function calculateSafeChunkSize(maxTokens: number): number {
+  // 安全系数：maxTokens / 2（考虑中文token比例）* 0.8（留余量）
+  const safeSize = Math.floor((maxTokens / 2) * 0.8);
+  // 最小 100，最大 2000
+  return Math.max(100, Math.min(safeSize, 2000));
 }
 
 // 文本分块函数
@@ -81,31 +139,44 @@ function splitTextIntoChunks(
  */
 export async function POST(request: NextRequest) {
   try {
+    // 获取 Reasoning RAG 配置
+    const ragConfig = getConfig();
+    
     const body = await request.json();
     const { 
       action = 'vectorize-all',
       embeddingModel = DEFAULT_EMBEDDING_MODEL,
-      chunkSize = 500,
-      chunkOverlap = 50,
+      chunkSize: requestedChunkSize = ragConfig.chunkSize,
+      chunkOverlap = ragConfig.chunkOverlap,
       files: specificFiles  // 可选：指定要向量化的文件
     } = body;
 
+    // 获取模型的 maxTokens 限制并自动调整 chunkSize
+    const modelMaxTokens = getModelMaxTokens(embeddingModel);
+    const safeChunkSize = calculateSafeChunkSize(modelMaxTokens);
+    const chunkSize = Math.min(requestedChunkSize, safeChunkSize);
+    
     console.log(`[Reasoning Vectorize] ========================================`);
     console.log(`[Reasoning Vectorize] Action: ${action}`);
     console.log(`[Reasoning Vectorize] Model: ${embeddingModel}`);
-    console.log(`[Reasoning Vectorize] Collection: ${REASONING_COLLECTION}`);
+    console.log(`[Reasoning Vectorize] Model maxTokens: ${modelMaxTokens}`);
+    console.log(`[Reasoning Vectorize] Safe chunkSize: ${safeChunkSize} (requested: ${requestedChunkSize}, using: ${chunkSize})`);
+    console.log(`[Reasoning Vectorize] Collection: ${ragConfig.collection}`);
+    console.log(`[Reasoning Vectorize] Dimension: ${ragConfig.dimension}D`);
+    console.log(`[Reasoning Vectorize] Upload Dir: ${ragConfig.uploadDir}`);
     console.log(`[Reasoning Vectorize] ========================================`);
 
     // 检查上传目录
-    if (!existsSync(REASONING_UPLOAD_DIR)) {
+    if (!existsSync(ragConfig.uploadDir)) {
       return NextResponse.json({
         success: false,
-        error: '没有找到上传的文件，请先上传文件'
+        error: '没有找到上传的文件，请先上传文件',
+        uploadDir: ragConfig.uploadDir
       }, { status: 400 });
     }
 
     // 获取文件列表
-    const allFiles = await readdir(REASONING_UPLOAD_DIR);
+    const allFiles = await readdir(ragConfig.uploadDir);
     const textFiles = allFiles.filter(f => f.endsWith('_parsed.txt'));
 
     if (textFiles.length === 0) {
@@ -127,13 +198,13 @@ export async function POST(request: NextRequest) {
       }, { status: 400 });
     }
 
-    // 获取模型维度
-    const dimension = getModelDimension(embeddingModel);
-    console.log(`[Reasoning Vectorize] Model dimension: ${dimension}D`);
+    // 使用配置的维度（优先）或模型维度
+    const dimension = ragConfig.dimension;
+    console.log(`[Reasoning Vectorize] Using dimension: ${dimension}D (from config)`);
 
-    // 创建 Milvus 客户端 - 使用独立集合
+    // 创建 Milvus 客户端 - 使用配置的独立集合
     const milvus = new MilvusVectorStore({
-      collectionName: REASONING_COLLECTION,
+      collectionName: ragConfig.collection,
       embeddingDimension: dimension,
       metricType: 'COSINE'
     });
@@ -148,7 +219,7 @@ export async function POST(request: NextRequest) {
       await milvus.clearCollection();
     }
     
-    await milvus.initializeCollection();
+    await milvus.initializeCollection(true);
 
     // 使用统一配置系统创建 Embedding 模型
     const embeddings = createEmbedding(embeddingModel);
@@ -165,7 +236,7 @@ export async function POST(request: NextRequest) {
 
     for (const filename of filesToProcess) {
       try {
-        const filePath = path.join(REASONING_UPLOAD_DIR, filename);
+        const filePath = path.join(ragConfig.uploadDir, filename);
         const content = await readFile(filePath, 'utf-8');
 
         if (!content.trim()) {
@@ -177,9 +248,34 @@ export async function POST(request: NextRequest) {
         const chunks = splitTextIntoChunks(content, chunkSize, chunkOverlap);
         console.log(`[Reasoning Vectorize] ${filename}: ${chunks.length} chunks`);
 
-        // 生成嵌入向量
+        // 分批生成嵌入向量（每批最多 10 个 chunk，避免超出 API 限制）
+        const BATCH_SIZE = 10;
         const chunkTexts = chunks.map(c => c.text);
-        const vectors = await embeddings.embedDocuments(chunkTexts);
+        const vectors: number[][] = [];
+        
+        for (let i = 0; i < chunkTexts.length; i += BATCH_SIZE) {
+          const batch = chunkTexts.slice(i, i + BATCH_SIZE);
+          try {
+            const batchVectors = await embeddings.embedDocuments(batch);
+            vectors.push(...batchVectors);
+          } catch (batchError) {
+            // 如果批量失败，尝试逐个处理
+            console.warn(`[Reasoning Vectorize] 批量嵌入失败，尝试逐个处理...`);
+            for (const text of batch) {
+              try {
+                // 如果单个文本仍然太长，截断它
+                const truncatedText = text.length > chunkSize ? text.slice(0, chunkSize) : text;
+                const singleVector = await embeddings.embedDocuments([truncatedText]);
+                vectors.push(...singleVector);
+              } catch (singleError) {
+                console.error(`[Reasoning Vectorize] 单个文本嵌入失败:`, singleError);
+                // 使用零向量作为占位符
+                const dimension = getModelDimension(embeddingModel);
+                vectors.push(new Array(dimension).fill(0));
+              }
+            }
+          }
+        }
 
         // 构建文档
         const documents = chunks.map((chunk, i) => ({
@@ -192,7 +288,7 @@ export async function POST(request: NextRequest) {
             totalChunks: chunks.length,
             startIndex: chunk.startIndex,
             endIndex: chunk.endIndex,
-            collection: REASONING_COLLECTION,
+            collection: ragConfig.collection,
             timestamp: Date.now()
           }
         }));
@@ -223,13 +319,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       message: `成功向量化 ${results.filter(r => r.success).length}/${filesToProcess.length} 个文件`,
-      collection: REASONING_COLLECTION,
+      collection: ragConfig.collection,
       embeddingModel,
       dimension,
+      chunkSize,
+      chunkOverlap,
       totalChunks,
       totalDocuments,
       results,
-      stats: newStats
+      stats: newStats,
+      config: getReasoningRAGConfigSummary()
     });
 
   } catch (error) {
@@ -247,8 +346,13 @@ export async function POST(request: NextRequest) {
  */
 export async function GET() {
   try {
+    // 获取 Reasoning RAG 配置
+    const ragConfig = getConfig();
+    const configSummary = getReasoningRAGConfigSummary();
+    
     const milvus = new MilvusVectorStore({
-      collectionName: REASONING_COLLECTION
+      collectionName: ragConfig.collection,
+      embeddingDimension: ragConfig.dimension
     });
 
     await milvus.connect();
@@ -258,33 +362,36 @@ export async function GET() {
     let fileCount = 0;
     let textFileCount = 0;
     
-    if (existsSync(REASONING_UPLOAD_DIR)) {
-      const allFiles = await readdir(REASONING_UPLOAD_DIR);
+    if (existsSync(ragConfig.uploadDir)) {
+      const allFiles = await readdir(ragConfig.uploadDir);
       textFileCount = allFiles.filter(f => f.endsWith('_parsed.txt')).length;
       fileCount = allFiles.filter(f => !f.endsWith('_parsed.txt')).length;
     }
 
     return NextResponse.json({
       success: true,
-      collection: REASONING_COLLECTION,
-      collectionStats: stats || { rowCount: 0, name: REASONING_COLLECTION },
+      collection: ragConfig.collection,
+      collectionStats: stats || { rowCount: 0, name: ragConfig.collection },
       fileStats: {
         uploadedFiles: fileCount,
         textFiles: textFileCount,
-        uploadDir: 'reasoning-uploads'
+        uploadDir: ragConfig.uploadDir
       },
-      isReady: stats && stats.rowCount > 0
+      isReady: stats && stats.rowCount > 0,
+      config: configSummary
     });
 
   } catch (error) {
     console.error('[Reasoning Vectorize] Get stats error:', error);
+    const ragConfig = getConfig();
     return NextResponse.json({
       success: false,
       error: '获取状态失败',
       details: error instanceof Error ? error.message : String(error),
-      collection: REASONING_COLLECTION,
+      collection: ragConfig.collection,
       collectionStats: null,
-      isReady: false
+      isReady: false,
+      config: getReasoningRAGConfigSummary()
     }, { status: 500 });
   }
 }
@@ -294,8 +401,12 @@ export async function GET() {
  */
 export async function DELETE() {
   try {
+    // 获取 Reasoning RAG 配置
+    const ragConfig = getConfig();
+    
     const milvus = new MilvusVectorStore({
-      collectionName: REASONING_COLLECTION
+      collectionName: ragConfig.collection,
+      embeddingDimension: ragConfig.dimension
     });
 
     await milvus.connect();
@@ -303,15 +414,18 @@ export async function DELETE() {
 
     return NextResponse.json({
       success: true,
-      message: `成功清空集合: ${REASONING_COLLECTION}`
+      message: `成功清空集合: ${ragConfig.collection}`,
+      collection: ragConfig.collection
     });
 
   } catch (error) {
     console.error('[Reasoning Vectorize] Clear collection error:', error);
+    const ragConfig = getConfig();
     return NextResponse.json({
       success: false,
       error: '清空集合失败',
-      details: error instanceof Error ? error.message : String(error)
+      details: error instanceof Error ? error.message : String(error),
+      collection: ragConfig.collection
     }, { status: 500 });
   }
 }

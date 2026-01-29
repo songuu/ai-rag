@@ -202,21 +202,42 @@ class SimpleTokenizer {
       throw new Error('Tokenizer not initialized');
     }
 
-    // 强制转换为字符串类型
+    // 强制转换为字符串类型 - 增强类型检查
     let textStr: string;
-    if (typeof text === 'string') {
-      textStr = text;
-    } else if (text === null || text === undefined) {
+    
+    try {
+      if (typeof text === 'string') {
+        textStr = text;
+      } else if (text === null || text === undefined) {
+        textStr = '';
+      } else if (typeof text === 'object') {
+        // 如果是对象，尝试获取其 text/content/query 属性
+        const extracted = text.text || text.content || text.query || text.pageContent;
+        if (typeof extracted === 'string') {
+          textStr = extracted;
+        } else if (extracted != null) {
+          textStr = String(extracted);
+        } else {
+          // 尝试 toString，但确保结果是字符串
+          const toStr = text.toString?.();
+          textStr = typeof toStr === 'string' ? toStr : '';
+        }
+      } else {
+        textStr = String(text);
+      }
+    } catch (conversionError) {
+      console.error('[Tokenizer] 文本转换错误:', conversionError, 'Input type:', typeof text);
       textStr = '';
-    } else if (typeof text === 'object') {
-      // 如果是对象，尝试获取其 text/content/query 属性
-      textStr = String(text.text || text.content || text.query || text.toString() || '');
-    } else {
-      textStr = String(text);
+    }
+
+    // 最终验证：确保 textStr 是字符串类型
+    if (typeof textStr !== 'string') {
+      console.error('[Tokenizer] 转换后的文本不是字符串类型:', typeof textStr, textStr);
+      textStr = '';
     }
 
     // 如果 text 为空，返回空数组
-    if (!textStr.trim()) {
+    if (!textStr || !textStr.trim()) {
       return [];
     }
 

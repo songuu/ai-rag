@@ -36,7 +36,10 @@ import {
   selectModelByDimension,
   getModelFactory,
   isOllamaProvider,
+  getConfigSummary,
 } from './model-config';
+import { getEmbeddingConfigSummary } from './embedding-config';
+import { getReasoningRAGConfig } from './milvus-config';
 
 // ==================== 类型定义 ====================
 
@@ -1354,37 +1357,53 @@ export async function executeReasoningRAG(
   
   const startTime = Date.now();
   
-  // 合并配置 - 使用 Reasoning RAG 专用集合
+  // 从环境变量获取 Reasoning RAG 配置
+  const ragEnvConfig = getReasoningRAGConfig();
+  const llmConfig = getConfigSummary();
+  const embeddingConfig = getEmbeddingConfigSummary();
+  
+  // 合并配置 - 使用 Reasoning RAG 专用集合（从环境变量）
   const defaultMilvusConfig: MilvusConfig = {
-    collectionName: 'reasoning_rag_documents',  // Reasoning RAG 专用集合（必须使用独立集合）
+    collectionName: ragEnvConfig.collection,  // 从环境变量: REASONING_RAG_COLLECTION
+    embeddingDimension: ragEnvConfig.dimension, // 从环境变量: REASONING_RAG_DIMENSION
   };
   
+  // 默认配置（从环境变量）
   const defaultConfig: ReasoningRAGState['config'] = {
-    reasoningModel: 'deepseek-r1:7b',
-    embeddingModel: 'nomic-embed-text',
-    topK: 50,
-    rerankTopK: 5,
-    similarityThreshold: 0.3,
-    enableBM25: true,
-    enableRerank: true,
-    maxIterations: 3,
-    temperature: 0.7,
+    // 模型配置 - 从统一配置系统获取
+    reasoningModel: llmConfig.reasoningModel || 'deepseek-r1:7b',
+    embeddingModel: embeddingConfig.model || 'nomic-embed-text',
+    // 检索配置 - 从 REASONING_RAG_* 环境变量获取
+    topK: ragEnvConfig.topK,
+    rerankTopK: ragEnvConfig.rerankTopK,
+    similarityThreshold: ragEnvConfig.similarityThreshold,
+    enableBM25: ragEnvConfig.enableBM25,
+    enableRerank: ragEnvConfig.enableRerank,
+    // 推理配置
+    maxIterations: ragEnvConfig.maxIterations,
+    temperature: ragEnvConfig.temperature,
     milvusConfig: defaultMilvusConfig,
   };
   
-  // 智能合并配置，确保 milvusConfig.collectionName 始终使用专用集合
+  // 智能合并配置，确保 milvusConfig.collectionName 始终使用环境变量配置的专用集合
   const finalConfig = { 
     ...defaultConfig, 
     ...config,
-    // 强制使用 Reasoning RAG 专用集合，不允许被覆盖
+    // 强制使用 Reasoning RAG 专用集合（从环境变量），不允许被覆盖
     milvusConfig: {
       ...defaultMilvusConfig,
       ...(config?.milvusConfig || {}),
-      collectionName: 'reasoning_rag_documents',  // 强制使用专用集合
+      collectionName: ragEnvConfig.collection,  // 强制使用环境变量配置的专用集合
+      embeddingDimension: ragEnvConfig.dimension,
     }
   };
   
-  console.log(`[Reasoning RAG] 使用 Milvus 集合: ${finalConfig.milvusConfig?.collectionName}`);
+  console.log(`[Reasoning RAG] 配置信息:`, {
+    collection: finalConfig.milvusConfig?.collectionName,
+    dimension: finalConfig.milvusConfig?.embeddingDimension,
+    reasoningModel: finalConfig.reasoningModel,
+    embeddingModel: finalConfig.embeddingModel,
+  });
   
   // 初始状态
   const initialState: Partial<typeof ReasoningRAGAnnotation.State> = {
